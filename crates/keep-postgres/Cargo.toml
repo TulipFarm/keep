@@ -1,0 +1,21 @@
+[package]
+name = "keep-postgres"
+description = "Postgres adapter for Keep: the pgvector projection used by the postgres-vector profile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+keep-store.workspace = true
+pgvector.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-postgres-rustls = "0.14"
+webpki-roots = "1"
+
+[lints]
+workspace = true

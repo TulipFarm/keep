@@ -1,0 +1,145 @@
+# Development-track slice run through the local GitHub Copilot CLI.
+#
+# NON-CANONICAL: the CLI adds its own hidden system prompt to every call and
+# does not pin the upstream model, so these numbers are for development only.
+# Comparison and gate commands refuse runs made from this manifest.
+# Needs a build with `--features local-embeddings` and `--allow-model-calls`.
+# LoCoMo is CC BY-NC 4.0: non-commercial use only.
+schema_version = 1
+id = "locomo-copilot-dev"
+description = "LoCoMo development slice (2 conversations, 26 questions) through the Copilot CLI"
+phase = "development"
+track = "development"
+seeds = [1]
+
+[dataset]
+kind = "locomo"
+path = "../../data/locomo/locomo10.json"
+sha256 = "sha256:79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4"
+gold_track = "original"
+subset = { path = "locomo-copilot-dev.subset.txt", sha256 = "sha256:d7bccdfd73f8f049ceeba40df5f84a9532b44e81a82cee74ad479f4f907eb626" }
+
+[holdout]
+salt = "keep-locomo-holdout-v1"
+fraction = 0.3
+commitment = "sha256:fcb8fd651affba4d8d8acd1674d1ac2c362cc8a240b1994847075d50ff5f6a4d"
+
+[models.answer]
+provider = "copilot-cli"
+model = "gpt-5.6-luna"
+revision = "unpinned-upstream"
+tokenizer = "tiktoken-o200k-base"
+# Not the model's real window: a cap that keeps this slice inside its credit
+# budget. Full context runs only when the whole history fits.
+context_limit = 32768
+max_output_tokens = 256
+temperature = 0.0
+prompt_version = "answer-v1"
+timeout_secs = 180
+
+[models.answer.copilot]
+reasoning_effort = "low"
+# Reservation rates, set above the rates observed in probes. Real charges
+# come from the CLI's own usage report.
+credits_per_1k_input = 0.03
+credits_per_1k_output = 0.2
+overhead_tokens = 3000
+
+[models.judge]
+# A different model family from the answer model. This model rejects a
+# reasoning-effort setting, so none is passed.
+provider = "copilot-cli"
+model = "claude-haiku-4.5"
+revision = "unpinned-upstream"
+tokenizer = "tiktoken-o200k-base"
+context_limit = 32768
+max_output_tokens = 16
+temperature = 0.0
+prompt_version = "judge-v1"
+timeout_secs = 180
+
+[models.judge.copilot]
+credits_per_1k_input = 0.12
+credits_per_1k_output = 0.6
+overhead_tokens = 2300
+
+[embedding]
+provider = "local-onnx"
+model = "BAAI/bge-small-en-v1.5"
+revision = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+dimensions = 384
+batch_size = 64
+
+[embedding.local]
+pooling = "cls"
+max_length = 512
+
+[embedding.local.sha256]
+"onnx/model.onnx" = "sha256:828e1496d7fabb79cfa4dcd84fa38625c0d3d21da474a00f08db0f559940cf35"
+"tokenizer.json" = "sha256:d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+"config.json" = "sha256:094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750"
+"special_tokens_map.json" = "sha256:b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3"
+"tokenizer_config.json" = "sha256:9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+
+[storage]
+profile = "postgres-qdrant"
+
+[budget]
+# Copilot calls are capped in AI credits; the call, token and USD caps
+# apply to OpenAI-compatible providers only.
+max_model_calls = 0
+max_input_tokens = 0
+max_output_tokens = 0
+max_cost_usd = 0.0
+max_ai_credits = 150.0
+max_attempts = 3
+
+[dispatch]
+allow_model_calls = true
+concurrency = 4
+
+[[arms]]
+name = "full-context"
+kind = "full-context"
+
+[[arms]]
+name = "bm25"
+kind = "bm25"
+budget_tokens = 2000
+top_k = 20
+
+[[arms]]
+name = "dense"
+kind = "dense"
+budget_tokens = 2000
+top_k = 20
+
+[[arms]]
+name = "keep-m"
+kind = "keep"
+path = "m"
+representation = "structured"
+
+[[arms]]
+name = "keep-k0"
+kind = "keep"
+path = "k0"
+representation = "structured"
+
+[[arms]]
+name = "keep-k1"
+kind = "keep"
+path = "k1"
+representation = "structured"
+
+[[arms]]
+name = "keep-mk0"
+kind = "keep"
+path = "mk0"
+representation = "structured"
+
+[[arms]]
+name = "keep-mk1"
+kind = "keep"
+path = "mk1"
+representation = "structured"

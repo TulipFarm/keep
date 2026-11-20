@@ -1,0 +1,96 @@
+# Development-phase template for LongMemEval-S.
+#
+# Model pins are placeholders: dispatch refuses to start until every
+# PIN-REQUIRED value is replaced, prices and caps are set, and both
+# `dispatch.allow_model_calls = true` and `--allow-model-calls` are given.
+# Fetch the data first with `keep-bench fetch`.
+schema_version = 1
+id = "longmemeval-s-dev"
+description = "LongMemEval-S development run: full context and plain retrieval baselines"
+phase = "development"
+seeds = [1, 2, 3]
+
+[dataset]
+kind = "longmemeval-s"
+path = "../data/longmemeval/longmemeval_s_cleaned.json"
+sha256 = "sha256:d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
+gold_track = "original"
+
+[holdout]
+salt = "keep-longmemeval-s-holdout-v1"
+fraction = 0.3
+commitment = "sha256:6c2ad58a42c74a2002a87149f20cb5cf973b6a84a41ab3d23ce96e71bb9b6559"
+
+[models.answer]
+provider = "openai-compatible"
+model = "PIN-REQUIRED"
+revision = "PIN-REQUIRED"
+tokenizer = "PIN-REQUIRED"
+context_limit = 131072
+max_output_tokens = 256
+temperature = 0.0
+prompt_version = "answer-v1"
+base_url_env = "KEEP_ANSWER_BASE_URL"
+api_key_env = "KEEP_ANSWER_API_KEY"
+
+[models.judge]
+provider = "openai-compatible"
+model = "PIN-REQUIRED"
+revision = "PIN-REQUIRED"
+tokenizer = "PIN-REQUIRED"
+context_limit = 32768
+max_output_tokens = 16
+temperature = 0.0
+prompt_version = "judge-v1"
+base_url_env = "KEEP_JUDGE_BASE_URL"
+api_key_env = "KEEP_JUDGE_API_KEY"
+
+[embedding]
+provider = "openai-compatible"
+model = "PIN-REQUIRED"
+revision = "PIN-REQUIRED"
+dimensions = 1024
+base_url_env = "KEEP_EMBEDDING_BASE_URL"
+api_key_env = "KEEP_EMBEDDING_API_KEY"
+
+[storage]
+profile = "postgres-vector"
+
+[budget]
+max_model_calls = 0
+max_input_tokens = 0
+max_output_tokens = 0
+max_cost_usd = 0.0
+max_attempts = 3
+
+[dispatch]
+allow_model_calls = false
+
+[[arms]]
+name = "no-memory"
+kind = "no-memory"
+
+[[arms]]
+name = "full-context"
+kind = "full-context"
+
+[[arms]]
+name = "bm25"
+kind = "bm25"
+budget_tokens = 2000
+top_k = 20
+
+[[arms]]
+name = "dense"
+kind = "dense"
+budget_tokens = 2000
+top_k = 20
+
+[[arms]]
+name = "notes-grep"
+kind = "notes-grep"
+budget_tokens = 2000
+
+[[arms]]
+name = "oracle-evidence"
+kind = "oracle-evidence"

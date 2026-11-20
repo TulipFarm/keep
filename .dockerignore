@@ -1,0 +1,7 @@
+target/
+data/
+results/
+.keep-models/
+.keep-cache/
+.git/
+.env

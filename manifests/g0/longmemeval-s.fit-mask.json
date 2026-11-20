@@ -1,0 +1,2514 @@
+{
+  "schema": "keep-fit-mask-v1",
+  "dataset_hash": "sha256:d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "tokenizer": "tiktoken-o200k-base",
+  "tokenizer_exact": false,
+  "prompt_version": "answer-v1",
+  "context_limit": 128000,
+  "output_reserve": 256,
+  "entries": [
+    {
+      "question_id": "e47becba",
+      "input_tokens": 103952,
+      "fits": true
+    },
+    {
+      "question_id": "118b2229",
+      "input_tokens": 103095,
+      "fits": true
+    },
+    {
+      "question_id": "51a45a95",
+      "input_tokens": 105084,
+      "fits": true
+    },
+    {
+      "question_id": "58bf7951",
+      "input_tokens": 105233,
+      "fits": true
+    },
+    {
+      "question_id": "1e043500",
+      "input_tokens": 105037,
+      "fits": true
+    },
+    {
+      "question_id": "c5e8278d",
+      "input_tokens": 105271,
+      "fits": true
+    },
+    {
+      "question_id": "6ade9755",
+      "input_tokens": 103562,
+      "fits": true
+    },
+    {
+      "question_id": "6f9b354f",
+      "input_tokens": 106201,
+      "fits": true
+    },
+    {
+      "question_id": "58ef2f1c",
+      "input_tokens": 103079,
+      "fits": true
+    },
+    {
+      "question_id": "f8c5f88b",
+      "input_tokens": 104086,
+      "fits": true
+    },
+    {
+      "question_id": "5d3d2817",
+      "input_tokens": 105142,
+      "fits": true
+    },
+    {
+      "question_id": "7527f7e2",
+      "input_tokens": 104702,
+      "fits": true
+    },
+    {
+      "question_id": "c960da58",
+      "input_tokens": 104844,
+      "fits": true
+    },
+    {
+      "question_id": "3b6f954b",
+      "input_tokens": 103075,
+      "fits": true
+    },
+    {
+      "question_id": "726462e0",
+      "input_tokens": 104280,
+      "fits": true
+    },
+    {
+      "question_id": "94f70d80",
+      "input_tokens": 104040,
+      "fits": true
+    },
+    {
+      "question_id": "66f24dbb",
+      "input_tokens": 102993,
+      "fits": true
+    },
+    {
+      "question_id": "ad7109d1",
+      "input_tokens": 101760,
+      "fits": true
+    },
+    {
+      "question_id": "af8d2e46",
+      "input_tokens": 102440,
+      "fits": true
+    },
+    {
+      "question_id": "dccbc061",
+      "input_tokens": 102939,
+      "fits": true
+    },
+    {
+      "question_id": "c8c3f81d",
+      "input_tokens": 105987,
+      "fits": true
+    },
+    {
+      "question_id": "8ebdbe50",
+      "input_tokens": 106083,
+      "fits": true
+    },
+    {
+      "question_id": "6b168ec8",
+      "input_tokens": 106129,
+      "fits": true
+    },
+    {
+      "question_id": "75499fd8",
+      "input_tokens": 104493,
+      "fits": true
+    },
+    {
+      "question_id": "21436231",
+      "input_tokens": 103588,
+      "fits": true
+    },
+    {
+      "question_id": "95bcc1c8",
+      "input_tokens": 104911,
+      "fits": true
+    },
+    {
+      "question_id": "0862e8bf",
+      "input_tokens": 100913,
+      "fits": true
+    },
+    {
+      "question_id": "853b0a1d",
+      "input_tokens": 103860,
+      "fits": true
+    },
+    {
+      "question_id": "a06e4cfe",
+      "input_tokens": 105786,
+      "fits": true
+    },
+    {
+      "question_id": "37d43f65",
+      "input_tokens": 104669,
+      "fits": true
+    },
+    {
+      "question_id": "b86304ba",
+      "input_tokens": 101992,
+      "fits": true
+    },
+    {
+      "question_id": "d52b4f67",
+      "input_tokens": 104621,
+      "fits": true
+    },
+    {
+      "question_id": "25e5aa4f",
+      "input_tokens": 105046,
+      "fits": true
+    },
+    {
+      "question_id": "caf9ead2",
+      "input_tokens": 104552,
+      "fits": true
+    },
+    {
+      "question_id": "8550ddae",
+      "input_tokens": 105283,
+      "fits": true
+    },
+    {
+      "question_id": "60d45044",
+      "input_tokens": 105458,
+      "fits": true
+    },
+    {
+      "question_id": "3f1e9474",
+      "input_tokens": 104143,
+      "fits": true
+    },
+    {
+      "question_id": "86b68151",
+      "input_tokens": 103325,
+      "fits": true
+    },
+    {
+      "question_id": "577d4d32",
+      "input_tokens": 104408,
+      "fits": true
+    },
+    {
+      "question_id": "ec81a493",
+      "input_tokens": 105845,
+      "fits": true
+    },
+    {
+      "question_id": "15745da0",
+      "input_tokens": 105748,
+      "fits": true
+    },
+    {
+      "question_id": "e01b8e2f",
+      "input_tokens": 105012,
+      "fits": true
+    },
+    {
+      "question_id": "bc8a6e93",
+      "input_tokens": 103548,
+      "fits": true
+    },
+    {
+      "question_id": "ccb36322",
+      "input_tokens": 104195,
+      "fits": true
+    },
+    {
+      "question_id": "001be529",
+      "input_tokens": 104772,
+      "fits": true
+    },
+    {
+      "question_id": "b320f3f8",
+      "input_tokens": 104676,
+      "fits": true
+    },
+    {
+      "question_id": "19b5f2b3",
+      "input_tokens": 102513,
+      "fits": true
+    },
+    {
+      "question_id": "4fd1909e",
+      "input_tokens": 105435,
+      "fits": true
+    },
+    {
+      "question_id": "545bd2b5",
+      "input_tokens": 102861,
+      "fits": true
+    },
+    {
+      "question_id": "8a137a7f",
+      "input_tokens": 103721,
+      "fits": true
+    },
+    {
+      "question_id": "76d63226",
+      "input_tokens": 103389,
+      "fits": true
+    },
+    {
+      "question_id": "86f00804",
+      "input_tokens": 101618,
+      "fits": true
+    },
+    {
+      "question_id": "8e9d538c",
+      "input_tokens": 104750,
+      "fits": true
+    },
+    {
+      "question_id": "311778f1",
+      "input_tokens": 105830,
+      "fits": true
+    },
+    {
+      "question_id": "c19f7a0b",
+      "input_tokens": 104513,
+      "fits": true
+    },
+    {
+      "question_id": "4100d0a0",
+      "input_tokens": 104051,
+      "fits": true
+    },
+    {
+      "question_id": "29f2956b",
+      "input_tokens": 102154,
+      "fits": true
+    },
+    {
+      "question_id": "1faac195",
+      "input_tokens": 105483,
+      "fits": true
+    },
+    {
+      "question_id": "faba32e5",
+      "input_tokens": 105583,
+      "fits": true
+    },
+    {
+      "question_id": "f4f1d8a4",
+      "input_tokens": 104153,
+      "fits": true
+    },
+    {
+      "question_id": "c14c00dd",
+      "input_tokens": 104623,
+      "fits": true
+    },
+    {
+      "question_id": "36580ce8",
+      "input_tokens": 102829,
+      "fits": true
+    },
+    {
+      "question_id": "3d86fd0a",
+      "input_tokens": 105033,
+      "fits": true
+    },
+    {
+      "question_id": "a82c026e",
+      "input_tokens": 105891,
+      "fits": true
+    },
+    {
+      "question_id": "0862e8bf_abs",
+      "input_tokens": 104345,
+      "fits": true
+    },
+    {
+      "question_id": "15745da0_abs",
+      "input_tokens": 103125,
+      "fits": true
+    },
+    {
+      "question_id": "bc8a6e93_abs",
+      "input_tokens": 105223,
+      "fits": true
+    },
+    {
+      "question_id": "19b5f2b3_abs",
+      "input_tokens": 104279,
+      "fits": true
+    },
+    {
+      "question_id": "29f2956b_abs",
+      "input_tokens": 105431,
+      "fits": true
+    },
+    {
+      "question_id": "f4f1d8a4_abs",
+      "input_tokens": 105784,
+      "fits": true
+    },
+    {
+      "question_id": "0a995998",
+      "input_tokens": 105359,
+      "fits": true
+    },
+    {
+      "question_id": "6d550036",
+      "input_tokens": 98816,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_59c863d7",
+      "input_tokens": 105043,
+      "fits": true
+    },
+    {
+      "question_id": "b5ef892d",
+      "input_tokens": 104529,
+      "fits": true
+    },
+    {
+      "question_id": "e831120c",
+      "input_tokens": 103554,
+      "fits": true
+    },
+    {
+      "question_id": "3a704032",
+      "input_tokens": 105868,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_d84a3211",
+      "input_tokens": 104094,
+      "fits": true
+    },
+    {
+      "question_id": "aae3761f",
+      "input_tokens": 103102,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_f2262a51",
+      "input_tokens": 103442,
+      "fits": true
+    },
+    {
+      "question_id": "dd2973ad",
+      "input_tokens": 104701,
+      "fits": true
+    },
+    {
+      "question_id": "c4a1ceb8",
+      "input_tokens": 104304,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_a56e767c",
+      "input_tokens": 104520,
+      "fits": true
+    },
+    {
+      "question_id": "6cb6f249",
+      "input_tokens": 103150,
+      "fits": true
+    },
+    {
+      "question_id": "46a3abf7",
+      "input_tokens": 105133,
+      "fits": true
+    },
+    {
+      "question_id": "36b9f61e",
+      "input_tokens": 104396,
+      "fits": true
+    },
+    {
+      "question_id": "28dc39ac",
+      "input_tokens": 103947,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_2f8be40d",
+      "input_tokens": 103376,
+      "fits": true
+    },
+    {
+      "question_id": "2e6d26dc",
+      "input_tokens": 103378,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_15e38248",
+      "input_tokens": 104279,
+      "fits": true
+    },
+    {
+      "question_id": "88432d0a",
+      "input_tokens": 104850,
+      "fits": true
+    },
+    {
+      "question_id": "80ec1f4f",
+      "input_tokens": 104037,
+      "fits": true
+    },
+    {
+      "question_id": "d23cf73b",
+      "input_tokens": 104101,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_7fce9456",
+      "input_tokens": 104871,
+      "fits": true
+    },
+    {
+      "question_id": "d682f1a2",
+      "input_tokens": 104054,
+      "fits": true
+    },
+    {
+      "question_id": "7024f17c",
+      "input_tokens": 104002,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_5501fe77",
+      "input_tokens": 105354,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_2ba83207",
+      "input_tokens": 105804,
+      "fits": true
+    },
+    {
+      "question_id": "2318644b",
+      "input_tokens": 101449,
+      "fits": true
+    },
+    {
+      "question_id": "2ce6a0f2",
+      "input_tokens": 105610,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_d12ceb0e",
+      "input_tokens": 102100,
+      "fits": true
+    },
+    {
+      "question_id": "00ca467f",
+      "input_tokens": 104798,
+      "fits": true
+    },
+    {
+      "question_id": "b3c15d39",
+      "input_tokens": 101060,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_31ff4165",
+      "input_tokens": 102832,
+      "fits": true
+    },
+    {
+      "question_id": "eeda8a6d",
+      "input_tokens": 105838,
+      "fits": true
+    },
+    {
+      "question_id": "2788b940",
+      "input_tokens": 102777,
+      "fits": true
+    },
+    {
+      "question_id": "60bf93ed",
+      "input_tokens": 104292,
+      "fits": true
+    },
+    {
+      "question_id": "9d25d4e0",
+      "input_tokens": 105567,
+      "fits": true
+    },
+    {
+      "question_id": "129d1232",
+      "input_tokens": 103088,
+      "fits": true
+    },
+    {
+      "question_id": "60472f9c",
+      "input_tokens": 97816,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_194be4b3",
+      "input_tokens": 103706,
+      "fits": true
+    },
+    {
+      "question_id": "a9f6b44c",
+      "input_tokens": 104575,
+      "fits": true
+    },
+    {
+      "question_id": "d851d5ba",
+      "input_tokens": 103895,
+      "fits": true
+    },
+    {
+      "question_id": "5a7937c8",
+      "input_tokens": 102840,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_ab202e7f",
+      "input_tokens": 104983,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_e05b82a6",
+      "input_tokens": 105302,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_731e37d7",
+      "input_tokens": 105021,
+      "fits": true
+    },
+    {
+      "question_id": "edced276",
+      "input_tokens": 104011,
+      "fits": true
+    },
+    {
+      "question_id": "10d9b85a",
+      "input_tokens": 105191,
+      "fits": true
+    },
+    {
+      "question_id": "e3038f8c",
+      "input_tokens": 103554,
+      "fits": true
+    },
+    {
+      "question_id": "2b8f3739",
+      "input_tokens": 106573,
+      "fits": true
+    },
+    {
+      "question_id": "1a8a66a6",
+      "input_tokens": 104765,
+      "fits": true
+    },
+    {
+      "question_id": "c2ac3c61",
+      "input_tokens": 105163,
+      "fits": true
+    },
+    {
+      "question_id": "bf659f65",
+      "input_tokens": 102393,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_372c3eed",
+      "input_tokens": 104966,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_2f91af09",
+      "input_tokens": 105544,
+      "fits": true
+    },
+    {
+      "question_id": "81507db6",
+      "input_tokens": 105914,
+      "fits": true
+    },
+    {
+      "question_id": "88432d0a_abs",
+      "input_tokens": 105074,
+      "fits": true
+    },
+    {
+      "question_id": "80ec1f4f_abs",
+      "input_tokens": 103427,
+      "fits": true
+    },
+    {
+      "question_id": "eeda8a6d_abs",
+      "input_tokens": 103734,
+      "fits": true
+    },
+    {
+      "question_id": "60bf93ed_abs",
+      "input_tokens": 103716,
+      "fits": true
+    },
+    {
+      "question_id": "edced276_abs",
+      "input_tokens": 103600,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_372c3eed_abs",
+      "input_tokens": 105049,
+      "fits": true
+    },
+    {
+      "question_id": "8a2466db",
+      "input_tokens": 105273,
+      "fits": true
+    },
+    {
+      "question_id": "06878be2",
+      "input_tokens": 104820,
+      "fits": true
+    },
+    {
+      "question_id": "75832dbd",
+      "input_tokens": 102822,
+      "fits": true
+    },
+    {
+      "question_id": "0edc2aef",
+      "input_tokens": 105924,
+      "fits": true
+    },
+    {
+      "question_id": "35a27287",
+      "input_tokens": 101733,
+      "fits": true
+    },
+    {
+      "question_id": "32260d93",
+      "input_tokens": 103228,
+      "fits": true
+    },
+    {
+      "question_id": "195a1a1b",
+      "input_tokens": 104428,
+      "fits": true
+    },
+    {
+      "question_id": "afdc33df",
+      "input_tokens": 106225,
+      "fits": true
+    },
+    {
+      "question_id": "caf03d32",
+      "input_tokens": 105041,
+      "fits": true
+    },
+    {
+      "question_id": "54026fce",
+      "input_tokens": 106208,
+      "fits": true
+    },
+    {
+      "question_id": "06f04340",
+      "input_tokens": 103596,
+      "fits": true
+    },
+    {
+      "question_id": "6b7dfb22",
+      "input_tokens": 105704,
+      "fits": true
+    },
+    {
+      "question_id": "1a1907b4",
+      "input_tokens": 105976,
+      "fits": true
+    },
+    {
+      "question_id": "09d032c9",
+      "input_tokens": 103517,
+      "fits": true
+    },
+    {
+      "question_id": "38146c39",
+      "input_tokens": 105072,
+      "fits": true
+    },
+    {
+      "question_id": "d24813b1",
+      "input_tokens": 104070,
+      "fits": true
+    },
+    {
+      "question_id": "57f827a0",
+      "input_tokens": 105217,
+      "fits": true
+    },
+    {
+      "question_id": "95228167",
+      "input_tokens": 104221,
+      "fits": true
+    },
+    {
+      "question_id": "505af2f5",
+      "input_tokens": 105013,
+      "fits": true
+    },
+    {
+      "question_id": "75f70248",
+      "input_tokens": 104988,
+      "fits": true
+    },
+    {
+      "question_id": "d6233ab6",
+      "input_tokens": 104820,
+      "fits": true
+    },
+    {
+      "question_id": "1da05512",
+      "input_tokens": 105842,
+      "fits": true
+    },
+    {
+      "question_id": "fca70973",
+      "input_tokens": 103365,
+      "fits": true
+    },
+    {
+      "question_id": "b6025781",
+      "input_tokens": 105993,
+      "fits": true
+    },
+    {
+      "question_id": "a89d7624",
+      "input_tokens": 104355,
+      "fits": true
+    },
+    {
+      "question_id": "b0479f84",
+      "input_tokens": 103684,
+      "fits": true
+    },
+    {
+      "question_id": "1d4e3b97",
+      "input_tokens": 104664,
+      "fits": true
+    },
+    {
+      "question_id": "07b6f563",
+      "input_tokens": 104588,
+      "fits": true
+    },
+    {
+      "question_id": "1c0ddc50",
+      "input_tokens": 105433,
+      "fits": true
+    },
+    {
+      "question_id": "0a34ad58",
+      "input_tokens": 104373,
+      "fits": true
+    },
+    {
+      "question_id": "d3ab962e",
+      "input_tokens": 103624,
+      "fits": true
+    },
+    {
+      "question_id": "2311e44b",
+      "input_tokens": 104356,
+      "fits": true
+    },
+    {
+      "question_id": "cc06de0d",
+      "input_tokens": 105007,
+      "fits": true
+    },
+    {
+      "question_id": "a11281a2",
+      "input_tokens": 106513,
+      "fits": true
+    },
+    {
+      "question_id": "4f54b7c9",
+      "input_tokens": 98865,
+      "fits": true
+    },
+    {
+      "question_id": "85fa3a3f",
+      "input_tokens": 105005,
+      "fits": true
+    },
+    {
+      "question_id": "9aaed6a3",
+      "input_tokens": 104429,
+      "fits": true
+    },
+    {
+      "question_id": "1f2b8d4f",
+      "input_tokens": 103776,
+      "fits": true
+    },
+    {
+      "question_id": "e6041065",
+      "input_tokens": 103581,
+      "fits": true
+    },
+    {
+      "question_id": "51c32626",
+      "input_tokens": 104842,
+      "fits": true
+    },
+    {
+      "question_id": "d905b33f",
+      "input_tokens": 104960,
+      "fits": true
+    },
+    {
+      "question_id": "7405e8b1",
+      "input_tokens": 105684,
+      "fits": true
+    },
+    {
+      "question_id": "f35224e0",
+      "input_tokens": 105663,
+      "fits": true
+    },
+    {
+      "question_id": "6456829e",
+      "input_tokens": 104689,
+      "fits": true
+    },
+    {
+      "question_id": "a4996e51",
+      "input_tokens": 105699,
+      "fits": true
+    },
+    {
+      "question_id": "3c1045c8",
+      "input_tokens": 100620,
+      "fits": true
+    },
+    {
+      "question_id": "60036106",
+      "input_tokens": 103069,
+      "fits": true
+    },
+    {
+      "question_id": "681a1674",
+      "input_tokens": 105425,
+      "fits": true
+    },
+    {
+      "question_id": "e25c3b8d",
+      "input_tokens": 105225,
+      "fits": true
+    },
+    {
+      "question_id": "4adc0475",
+      "input_tokens": 105990,
+      "fits": true
+    },
+    {
+      "question_id": "4bc144e2",
+      "input_tokens": 104511,
+      "fits": true
+    },
+    {
+      "question_id": "ef66a6e5",
+      "input_tokens": 103267,
+      "fits": true
+    },
+    {
+      "question_id": "5025383b",
+      "input_tokens": 102289,
+      "fits": true
+    },
+    {
+      "question_id": "a1cc6108",
+      "input_tokens": 103371,
+      "fits": true
+    },
+    {
+      "question_id": "9ee3ecd6",
+      "input_tokens": 104131,
+      "fits": true
+    },
+    {
+      "question_id": "3fdac837",
+      "input_tokens": 102335,
+      "fits": true
+    },
+    {
+      "question_id": "91b15a6e",
+      "input_tokens": 104578,
+      "fits": true
+    },
+    {
+      "question_id": "27016adc",
+      "input_tokens": 105751,
+      "fits": true
+    },
+    {
+      "question_id": "720133ac",
+      "input_tokens": 106329,
+      "fits": true
+    },
+    {
+      "question_id": "77eafa52",
+      "input_tokens": 104875,
+      "fits": true
+    },
+    {
+      "question_id": "8979f9ec",
+      "input_tokens": 105032,
+      "fits": true
+    },
+    {
+      "question_id": "0100672e",
+      "input_tokens": 105938,
+      "fits": true
+    },
+    {
+      "question_id": "a96c20ee",
+      "input_tokens": 103334,
+      "fits": true
+    },
+    {
+      "question_id": "92a0aa75",
+      "input_tokens": 104160,
+      "fits": true
+    },
+    {
+      "question_id": "3fe836c9",
+      "input_tokens": 105571,
+      "fits": true
+    },
+    {
+      "question_id": "1c549ce4",
+      "input_tokens": 104270,
+      "fits": true
+    },
+    {
+      "question_id": "6c49646a",
+      "input_tokens": 105433,
+      "fits": true
+    },
+    {
+      "question_id": "1192316e",
+      "input_tokens": 104533,
+      "fits": true
+    },
+    {
+      "question_id": "0ea62687",
+      "input_tokens": 103397,
+      "fits": true
+    },
+    {
+      "question_id": "67e0d0f2",
+      "input_tokens": 105220,
+      "fits": true
+    },
+    {
+      "question_id": "bb7c3b45",
+      "input_tokens": 102994,
+      "fits": true
+    },
+    {
+      "question_id": "ba358f49",
+      "input_tokens": 104107,
+      "fits": true
+    },
+    {
+      "question_id": "61f8c8f8",
+      "input_tokens": 106019,
+      "fits": true
+    },
+    {
+      "question_id": "60159905",
+      "input_tokens": 105537,
+      "fits": true
+    },
+    {
+      "question_id": "ef9cf60a",
+      "input_tokens": 105828,
+      "fits": true
+    },
+    {
+      "question_id": "73d42213",
+      "input_tokens": 103261,
+      "fits": true
+    },
+    {
+      "question_id": "bc149d6b",
+      "input_tokens": 102280,
+      "fits": true
+    },
+    {
+      "question_id": "099778bb",
+      "input_tokens": 106438,
+      "fits": true
+    },
+    {
+      "question_id": "09ba9854",
+      "input_tokens": 102160,
+      "fits": true
+    },
+    {
+      "question_id": "d6062bb9",
+      "input_tokens": 104611,
+      "fits": true
+    },
+    {
+      "question_id": "157a136e",
+      "input_tokens": 104914,
+      "fits": true
+    },
+    {
+      "question_id": "c18a7dc8",
+      "input_tokens": 104448,
+      "fits": true
+    },
+    {
+      "question_id": "a3332713",
+      "input_tokens": 103368,
+      "fits": true
+    },
+    {
+      "question_id": "55241a1f",
+      "input_tokens": 105370,
+      "fits": true
+    },
+    {
+      "question_id": "a08a253f",
+      "input_tokens": 101369,
+      "fits": true
+    },
+    {
+      "question_id": "f0e564bc",
+      "input_tokens": 102178,
+      "fits": true
+    },
+    {
+      "question_id": "078150f1",
+      "input_tokens": 103284,
+      "fits": true
+    },
+    {
+      "question_id": "8cf4d046",
+      "input_tokens": 103841,
+      "fits": true
+    },
+    {
+      "question_id": "a346bb18",
+      "input_tokens": 105778,
+      "fits": true
+    },
+    {
+      "question_id": "37f165cf",
+      "input_tokens": 104035,
+      "fits": true
+    },
+    {
+      "question_id": "8e91e7d9",
+      "input_tokens": 104968,
+      "fits": true
+    },
+    {
+      "question_id": "87f22b4a",
+      "input_tokens": 104649,
+      "fits": true
+    },
+    {
+      "question_id": "e56a43b9",
+      "input_tokens": 104905,
+      "fits": true
+    },
+    {
+      "question_id": "efc3f7c2",
+      "input_tokens": 105569,
+      "fits": true
+    },
+    {
+      "question_id": "21d02d0d",
+      "input_tokens": 105464,
+      "fits": true
+    },
+    {
+      "question_id": "2311e44b_abs",
+      "input_tokens": 105164,
+      "fits": true
+    },
+    {
+      "question_id": "6456829e_abs",
+      "input_tokens": 103303,
+      "fits": true
+    },
+    {
+      "question_id": "e5ba910e_abs",
+      "input_tokens": 102217,
+      "fits": true
+    },
+    {
+      "question_id": "a96c20ee_abs",
+      "input_tokens": 105809,
+      "fits": true
+    },
+    {
+      "question_id": "ba358f49_abs",
+      "input_tokens": 104060,
+      "fits": true
+    },
+    {
+      "question_id": "09ba9854_abs",
+      "input_tokens": 104582,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_59149c77",
+      "input_tokens": 103325,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_f49edff3",
+      "input_tokens": 103755,
+      "fits": true
+    },
+    {
+      "question_id": "71017276",
+      "input_tokens": 102982,
+      "fits": true
+    },
+    {
+      "question_id": "b46e15ed",
+      "input_tokens": 105788,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_fa19884c",
+      "input_tokens": 102155,
+      "fits": true
+    },
+    {
+      "question_id": "0bc8ad92",
+      "input_tokens": 103477,
+      "fits": true
+    },
+    {
+      "question_id": "af082822",
+      "input_tokens": 105024,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_4929293a",
+      "input_tokens": 105528,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_b5700ca9",
+      "input_tokens": 103270,
+      "fits": true
+    },
+    {
+      "question_id": "9a707b81",
+      "input_tokens": 105130,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_1d4ab0c9",
+      "input_tokens": 104353,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_e072b769",
+      "input_tokens": 105406,
+      "fits": true
+    },
+    {
+      "question_id": "0db4c65d",
+      "input_tokens": 102676,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_1d80365e",
+      "input_tokens": 105274,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_7f6b06db",
+      "input_tokens": 103515,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_6dc9b45b",
+      "input_tokens": 102488,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_8279ba02",
+      "input_tokens": 102917,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_18c2b244",
+      "input_tokens": 106085,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_a1b77f9c",
+      "input_tokens": 105976,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_1916e0ea",
+      "input_tokens": 105938,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_7a0daae1",
+      "input_tokens": 105325,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_468eb063",
+      "input_tokens": 104283,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_7abb270c",
+      "input_tokens": 101143,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_1e4a8aeb",
+      "input_tokens": 106208,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_4fc4f797",
+      "input_tokens": 105084,
+      "fits": true
+    },
+    {
+      "question_id": "4dfccbf7",
+      "input_tokens": 104739,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_61e13b3c",
+      "input_tokens": 105000,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_45189cb4",
+      "input_tokens": 102629,
+      "fits": true
+    },
+    {
+      "question_id": "2ebe6c90",
+      "input_tokens": 102501,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_e061b84f",
+      "input_tokens": 103006,
+      "fits": true
+    },
+    {
+      "question_id": "370a8ff4",
+      "input_tokens": 102711,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_d6585ce8",
+      "input_tokens": 102610,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_4ef30696",
+      "input_tokens": 105018,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_ec93e27f",
+      "input_tokens": 105121,
+      "fits": true
+    },
+    {
+      "question_id": "6e984301",
+      "input_tokens": 105626,
+      "fits": true
+    },
+    {
+      "question_id": "8077ef71",
+      "input_tokens": 103627,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_f420262c",
+      "input_tokens": 104314,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_8e165409",
+      "input_tokens": 103327,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_74aed68e",
+      "input_tokens": 105118,
+      "fits": true
+    },
+    {
+      "question_id": "bcbe585f",
+      "input_tokens": 103893,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_21adecb5",
+      "input_tokens": 105644,
+      "fits": true
+    },
+    {
+      "question_id": "5e1b23de",
+      "input_tokens": 103721,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_98f46fc6",
+      "input_tokens": 104916,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_af6db32f",
+      "input_tokens": 106219,
+      "fits": true
+    },
+    {
+      "question_id": "eac54adc",
+      "input_tokens": 105896,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_7ddcf75f",
+      "input_tokens": 103847,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_a2d1d1f6",
+      "input_tokens": 105933,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_85da3956",
+      "input_tokens": 103174,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_b0863698",
+      "input_tokens": 105530,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_68e94287",
+      "input_tokens": 104294,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_e414231e",
+      "input_tokens": 105363,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_7ca326fa",
+      "input_tokens": 103377,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_7bc6cf22",
+      "input_tokens": 105079,
+      "fits": true
+    },
+    {
+      "question_id": "2ebe6c92",
+      "input_tokens": 104255,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_e061b84g",
+      "input_tokens": 103917,
+      "fits": true
+    },
+    {
+      "question_id": "71017277",
+      "input_tokens": 105309,
+      "fits": true
+    },
+    {
+      "question_id": "b46e15ee",
+      "input_tokens": 103560,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_d6585ce9",
+      "input_tokens": 102890,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_1e4a8aec",
+      "input_tokens": 104900,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_f420262d",
+      "input_tokens": 105206,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_59149c78",
+      "input_tokens": 105152,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_e414231f",
+      "input_tokens": 105562,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_4929293b",
+      "input_tokens": 105681,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_468eb064",
+      "input_tokens": 103154,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_fa19884d",
+      "input_tokens": 104768,
+      "fits": true
+    },
+    {
+      "question_id": "9a707b82",
+      "input_tokens": 104987,
+      "fits": true
+    },
+    {
+      "question_id": "eac54add",
+      "input_tokens": 102814,
+      "fits": true
+    },
+    {
+      "question_id": "4dfccbf8",
+      "input_tokens": 104513,
+      "fits": true
+    },
+    {
+      "question_id": "0bc8ad93",
+      "input_tokens": 104416,
+      "fits": true
+    },
+    {
+      "question_id": "6e984302",
+      "input_tokens": 103095,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_8279ba03",
+      "input_tokens": 104949,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_b5700ca0",
+      "input_tokens": 104522,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_68e94288",
+      "input_tokens": 104169,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_2655b836",
+      "input_tokens": 50535,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_2487a7cb",
+      "input_tokens": 27233,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_76048e76",
+      "input_tokens": 27473,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_2312f94c",
+      "input_tokens": 23369,
+      "fits": true
+    },
+    {
+      "question_id": "0bb5a684",
+      "input_tokens": 58730,
+      "fits": true
+    },
+    {
+      "question_id": "08f4fc43",
+      "input_tokens": 102641,
+      "fits": true
+    },
+    {
+      "question_id": "2c63a862",
+      "input_tokens": 52706,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_385a5000",
+      "input_tokens": 59180,
+      "fits": true
+    },
+    {
+      "question_id": "2a1811e2",
+      "input_tokens": 54644,
+      "fits": true
+    },
+    {
+      "question_id": "bbf86515",
+      "input_tokens": 92684,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_5dcc0aab",
+      "input_tokens": 46459,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_0b2f1d21",
+      "input_tokens": 32927,
+      "fits": true
+    },
+    {
+      "question_id": "f0853d11",
+      "input_tokens": 99314,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_6ed717ea",
+      "input_tokens": 30336,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_70e84552",
+      "input_tokens": 49198,
+      "fits": true
+    },
+    {
+      "question_id": "a3838d2b",
+      "input_tokens": 6809,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_93159ced",
+      "input_tokens": 82630,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_2d58bcd6",
+      "input_tokens": 99352,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_65aabe59",
+      "input_tokens": 58395,
+      "fits": true
+    },
+    {
+      "question_id": "982b5123",
+      "input_tokens": 63996,
+      "fits": true
+    },
+    {
+      "question_id": "b9cfe692",
+      "input_tokens": 27415,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_4edbafa2",
+      "input_tokens": 12723,
+      "fits": true
+    },
+    {
+      "question_id": "c8090214",
+      "input_tokens": 67715,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_483dd43c",
+      "input_tokens": 51222,
+      "fits": true
+    },
+    {
+      "question_id": "e4e14d04",
+      "input_tokens": 77876,
+      "fits": true
+    },
+    {
+      "question_id": "c9f37c46",
+      "input_tokens": 7918,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_2c50253f",
+      "input_tokens": 88890,
+      "fits": true
+    },
+    {
+      "question_id": "dcfa8644",
+      "input_tokens": 69532,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_b4a80587",
+      "input_tokens": 15037,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_9a159967",
+      "input_tokens": 17788,
+      "fits": true
+    },
+    {
+      "question_id": "cc6d1ec1",
+      "input_tokens": 86195,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_8c8961ae",
+      "input_tokens": 50418,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_d9af6064",
+      "input_tokens": 8592,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_7de946e7",
+      "input_tokens": 81939,
+      "fits": true
+    },
+    {
+      "question_id": "d01c6aa8",
+      "input_tokens": 56448,
+      "fits": true
+    },
+    {
+      "question_id": "993da5e2",
+      "input_tokens": 75766,
+      "fits": true
+    },
+    {
+      "question_id": "a3045048",
+      "input_tokens": 64655,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_d31cdae3",
+      "input_tokens": 70443,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_cd90e484",
+      "input_tokens": 28956,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_88806d6e",
+      "input_tokens": 94537,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_4cd9eba1",
+      "input_tokens": 3898,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_93f6379c",
+      "input_tokens": 45096,
+      "fits": true
+    },
+    {
+      "question_id": "b29f3365",
+      "input_tokens": 79367,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_2f56ae70",
+      "input_tokens": 79,
+      "fits": true
+    },
+    {
+      "question_id": "6613b389",
+      "input_tokens": 52795,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_78cf46a3",
+      "input_tokens": 53889,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_0a05b494",
+      "input_tokens": 838,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_1a1dc16d",
+      "input_tokens": 43067,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_2f584639",
+      "input_tokens": 18169,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_213fd887",
+      "input_tokens": 58558,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_5438fa52",
+      "input_tokens": 67149,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_c27434e8",
+      "input_tokens": 95036,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_fe651585",
+      "input_tokens": 83604,
+      "fits": true
+    },
+    {
+      "question_id": "8c18457d",
+      "input_tokens": 66908,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_70e84552_abs",
+      "input_tokens": 45821,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_93159ced_abs",
+      "input_tokens": 70233,
+      "fits": true
+    },
+    {
+      "question_id": "982b5123_abs",
+      "input_tokens": 68862,
+      "fits": true
+    },
+    {
+      "question_id": "c8090214_abs",
+      "input_tokens": 22183,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_c27434e8_abs",
+      "input_tokens": 70515,
+      "fits": true
+    },
+    {
+      "question_id": "gpt4_fe651585_abs",
+      "input_tokens": 13152,
+      "fits": true
+    },
+    {
+      "question_id": "6a1eabeb",
+      "input_tokens": 103505,
+      "fits": true
+    },
+    {
+      "question_id": "6aeb4375",
+      "input_tokens": 102119,
+      "fits": true
+    },
+    {
+      "question_id": "830ce83f",
+      "input_tokens": 103268,
+      "fits": true
+    },
+    {
+      "question_id": "852ce960",
+      "input_tokens": 103738,
+      "fits": true
+    },
+    {
+      "question_id": "945e3d21",
+      "input_tokens": 105756,
+      "fits": true
+    },
+    {
+      "question_id": "d7c942c3",
+      "input_tokens": 103707,
+      "fits": true
+    },
+    {
+      "question_id": "71315a70",
+      "input_tokens": 101657,
+      "fits": true
+    },
+    {
+      "question_id": "89941a93",
+      "input_tokens": 105204,
+      "fits": true
+    },
+    {
+      "question_id": "ce6d2d27",
+      "input_tokens": 104591,
+      "fits": true
+    },
+    {
+      "question_id": "9ea5eabc",
+      "input_tokens": 103702,
+      "fits": true
+    },
+    {
+      "question_id": "07741c44",
+      "input_tokens": 103657,
+      "fits": true
+    },
+    {
+      "question_id": "a1eacc2a",
+      "input_tokens": 104273,
+      "fits": true
+    },
+    {
+      "question_id": "184da446",
+      "input_tokens": 102935,
+      "fits": true
+    },
+    {
+      "question_id": "031748ae",
+      "input_tokens": 105554,
+      "fits": true
+    },
+    {
+      "question_id": "4d6b87c8",
+      "input_tokens": 102502,
+      "fits": true
+    },
+    {
+      "question_id": "0f05491a",
+      "input_tokens": 103109,
+      "fits": true
+    },
+    {
+      "question_id": "08e075c7",
+      "input_tokens": 104536,
+      "fits": true
+    },
+    {
+      "question_id": "f9e8c073",
+      "input_tokens": 105394,
+      "fits": true
+    },
+    {
+      "question_id": "41698283",
+      "input_tokens": 103800,
+      "fits": true
+    },
+    {
+      "question_id": "2698e78f",
+      "input_tokens": 101821,
+      "fits": true
+    },
+    {
+      "question_id": "b6019101",
+      "input_tokens": 105359,
+      "fits": true
+    },
+    {
+      "question_id": "45dc21b6",
+      "input_tokens": 103721,
+      "fits": true
+    },
+    {
+      "question_id": "5a4f22c0",
+      "input_tokens": 105776,
+      "fits": true
+    },
+    {
+      "question_id": "6071bd76",
+      "input_tokens": 104011,
+      "fits": true
+    },
+    {
+      "question_id": "e493bb7c",
+      "input_tokens": 106153,
+      "fits": true
+    },
+    {
+      "question_id": "618f13b2",
+      "input_tokens": 105291,
+      "fits": true
+    },
+    {
+      "question_id": "72e3ee87",
+      "input_tokens": 104005,
+      "fits": true
+    },
+    {
+      "question_id": "c4ea545c",
+      "input_tokens": 104110,
+      "fits": true
+    },
+    {
+      "question_id": "01493427",
+      "input_tokens": 103717,
+      "fits": true
+    },
+    {
+      "question_id": "6a27ffc2",
+      "input_tokens": 103238,
+      "fits": true
+    },
+    {
+      "question_id": "2133c1b5",
+      "input_tokens": 81248,
+      "fits": true
+    },
+    {
+      "question_id": "18bc8abd",
+      "input_tokens": 101968,
+      "fits": true
+    },
+    {
+      "question_id": "db467c8c",
+      "input_tokens": 100655,
+      "fits": true
+    },
+    {
+      "question_id": "7a87bd0c",
+      "input_tokens": 98843,
+      "fits": true
+    },
+    {
+      "question_id": "e61a7584",
+      "input_tokens": 91857,
+      "fits": true
+    },
+    {
+      "question_id": "1cea1afa",
+      "input_tokens": 105486,
+      "fits": true
+    },
+    {
+      "question_id": "ed4ddc30",
+      "input_tokens": 102935,
+      "fits": true
+    },
+    {
+      "question_id": "8fb83627",
+      "input_tokens": 103127,
+      "fits": true
+    },
+    {
+      "question_id": "b01defab",
+      "input_tokens": 105793,
+      "fits": true
+    },
+    {
+      "question_id": "22d2cb42",
+      "input_tokens": 103515,
+      "fits": true
+    },
+    {
+      "question_id": "0e4e4c46",
+      "input_tokens": 104647,
+      "fits": true
+    },
+    {
+      "question_id": "4b24c848",
+      "input_tokens": 104725,
+      "fits": true
+    },
+    {
+      "question_id": "7e974930",
+      "input_tokens": 102773,
+      "fits": true
+    },
+    {
+      "question_id": "603deb26",
+      "input_tokens": 106149,
+      "fits": true
+    },
+    {
+      "question_id": "59524333",
+      "input_tokens": 103469,
+      "fits": true
+    },
+    {
+      "question_id": "5831f84d",
+      "input_tokens": 101311,
+      "fits": true
+    },
+    {
+      "question_id": "eace081b",
+      "input_tokens": 106010,
+      "fits": true
+    },
+    {
+      "question_id": "affe2881",
+      "input_tokens": 104129,
+      "fits": true
+    },
+    {
+      "question_id": "50635ada",
+      "input_tokens": 105455,
+      "fits": true
+    },
+    {
+      "question_id": "e66b632c",
+      "input_tokens": 104785,
+      "fits": true
+    },
+    {
+      "question_id": "0ddfec37",
+      "input_tokens": 100453,
+      "fits": true
+    },
+    {
+      "question_id": "f685340e",
+      "input_tokens": 102910,
+      "fits": true
+    },
+    {
+      "question_id": "cc5ded98",
+      "input_tokens": 103732,
+      "fits": true
+    },
+    {
+      "question_id": "dfde3500",
+      "input_tokens": 104127,
+      "fits": true
+    },
+    {
+      "question_id": "69fee5aa",
+      "input_tokens": 104270,
+      "fits": true
+    },
+    {
+      "question_id": "7401057b",
+      "input_tokens": 98089,
+      "fits": true
+    },
+    {
+      "question_id": "cf22b7bf",
+      "input_tokens": 103807,
+      "fits": true
+    },
+    {
+      "question_id": "a2f3aa27",
+      "input_tokens": 104115,
+      "fits": true
+    },
+    {
+      "question_id": "c7dc5443",
+      "input_tokens": 105104,
+      "fits": true
+    },
+    {
+      "question_id": "06db6396",
+      "input_tokens": 100831,
+      "fits": true
+    },
+    {
+      "question_id": "3ba21379",
+      "input_tokens": 88423,
+      "fits": true
+    },
+    {
+      "question_id": "9bbe84a2",
+      "input_tokens": 102806,
+      "fits": true
+    },
+    {
+      "question_id": "10e09553",
+      "input_tokens": 103313,
+      "fits": true
+    },
+    {
+      "question_id": "dad224aa",
+      "input_tokens": 104511,
+      "fits": true
+    },
+    {
+      "question_id": "ba61f0b9",
+      "input_tokens": 105519,
+      "fits": true
+    },
+    {
+      "question_id": "42ec0761",
+      "input_tokens": 103420,
+      "fits": true
+    },
+    {
+      "question_id": "5c40ec5b",
+      "input_tokens": 103365,
+      "fits": true
+    },
+    {
+      "question_id": "c6853660",
+      "input_tokens": 104759,
+      "fits": true
+    },
+    {
+      "question_id": "26bdc477",
+      "input_tokens": 105347,
+      "fits": true
+    },
+    {
+      "question_id": "0977f2af",
+      "input_tokens": 104309,
+      "fits": true
+    },
+    {
+      "question_id": "6aeb4375_abs",
+      "input_tokens": 104166,
+      "fits": true
+    },
+    {
+      "question_id": "031748ae_abs",
+      "input_tokens": 106350,
+      "fits": true
+    },
+    {
+      "question_id": "2698e78f_abs",
+      "input_tokens": 105807,
+      "fits": true
+    },
+    {
+      "question_id": "2133c1b5_abs",
+      "input_tokens": 76026,
+      "fits": true
+    },
+    {
+      "question_id": "0ddfec37_abs",
+      "input_tokens": 104185,
+      "fits": true
+    },
+    {
+      "question_id": "f685340e_abs",
+      "input_tokens": 105392,
+      "fits": true
+    },
+    {
+      "question_id": "89941a94",
+      "input_tokens": 104444,
+      "fits": true
+    },
+    {
+      "question_id": "07741c45",
+      "input_tokens": 102061,
+      "fits": true
+    },
+    {
+      "question_id": "7161e7e2",
+      "input_tokens": 103865,
+      "fits": true
+    },
+    {
+      "question_id": "c4f10528",
+      "input_tokens": 105102,
+      "fits": true
+    },
+    {
+      "question_id": "89527b6b",
+      "input_tokens": 105537,
+      "fits": true
+    },
+    {
+      "question_id": "e9327a54",
+      "input_tokens": 103671,
+      "fits": true
+    },
+    {
+      "question_id": "4c36ccef",
+      "input_tokens": 105263,
+      "fits": true
+    },
+    {
+      "question_id": "6ae235be",
+      "input_tokens": 104186,
+      "fits": true
+    },
+    {
+      "question_id": "7e00a6cb",
+      "input_tokens": 104153,
+      "fits": true
+    },
+    {
+      "question_id": "1903aded",
+      "input_tokens": 103661,
+      "fits": true
+    },
+    {
+      "question_id": "ceb54acb",
+      "input_tokens": 104338,
+      "fits": true
+    },
+    {
+      "question_id": "f523d9fe",
+      "input_tokens": 106088,
+      "fits": true
+    },
+    {
+      "question_id": "0e5e2d1a",
+      "input_tokens": 105339,
+      "fits": true
+    },
+    {
+      "question_id": "fea54f57",
+      "input_tokens": 103698,
+      "fits": true
+    },
+    {
+      "question_id": "cc539528",
+      "input_tokens": 103789,
+      "fits": true
+    },
+    {
+      "question_id": "dc439ea3",
+      "input_tokens": 104590,
+      "fits": true
+    },
+    {
+      "question_id": "18dcd5a5",
+      "input_tokens": 105584,
+      "fits": true
+    },
+    {
+      "question_id": "488d3006",
+      "input_tokens": 105475,
+      "fits": true
+    },
+    {
+      "question_id": "58470ed2",
+      "input_tokens": 105128,
+      "fits": true
+    },
+    {
+      "question_id": "8cf51dda",
+      "input_tokens": 105026,
+      "fits": true
+    },
+    {
+      "question_id": "1d4da289",
+      "input_tokens": 106021,
+      "fits": true
+    },
+    {
+      "question_id": "8464fc84",
+      "input_tokens": 104101,
+      "fits": true
+    },
+    {
+      "question_id": "8aef76bc",
+      "input_tokens": 105091,
+      "fits": true
+    },
+    {
+      "question_id": "71a3fd6b",
+      "input_tokens": 104284,
+      "fits": true
+    },
+    {
+      "question_id": "2bf43736",
+      "input_tokens": 103029,
+      "fits": true
+    },
+    {
+      "question_id": "70b3e69b",
+      "input_tokens": 105434,
+      "fits": true
+    },
+    {
+      "question_id": "8752c811",
+      "input_tokens": 103618,
+      "fits": true
+    },
+    {
+      "question_id": "3249768e",
+      "input_tokens": 105302,
+      "fits": true
+    },
+    {
+      "question_id": "1b9b7252",
+      "input_tokens": 103643,
+      "fits": true
+    },
+    {
+      "question_id": "1568498a",
+      "input_tokens": 103099,
+      "fits": true
+    },
+    {
+      "question_id": "6222b6eb",
+      "input_tokens": 106058,
+      "fits": true
+    },
+    {
+      "question_id": "e8a79c70",
+      "input_tokens": 105733,
+      "fits": true
+    },
+    {
+      "question_id": "d596882b",
+      "input_tokens": 104729,
+      "fits": true
+    },
+    {
+      "question_id": "e3fc4d6e",
+      "input_tokens": 104061,
+      "fits": true
+    },
+    {
+      "question_id": "51b23612",
+      "input_tokens": 102547,
+      "fits": true
+    },
+    {
+      "question_id": "3e321797",
+      "input_tokens": 106007,
+      "fits": true
+    },
+    {
+      "question_id": "e982271f",
+      "input_tokens": 105181,
+      "fits": true
+    },
+    {
+      "question_id": "352ab8bd",
+      "input_tokens": 105094,
+      "fits": true
+    },
+    {
+      "question_id": "fca762bc",
+      "input_tokens": 104582,
+      "fits": true
+    },
+    {
+      "question_id": "7a8d0b71",
+      "input_tokens": 104797,
+      "fits": true
+    },
+    {
+      "question_id": "a40e080f",
+      "input_tokens": 105055,
+      "fits": true
+    },
+    {
+      "question_id": "8b9d4367",
+      "input_tokens": 104446,
+      "fits": true
+    },
+    {
+      "question_id": "5809eb10",
+      "input_tokens": 103853,
+      "fits": true
+    },
+    {
+      "question_id": "41275add",
+      "input_tokens": 105263,
+      "fits": true
+    },
+    {
+      "question_id": "4388e9dd",
+      "input_tokens": 103695,
+      "fits": true
+    },
+    {
+      "question_id": "4baee567",
+      "input_tokens": 102244,
+      "fits": true
+    },
+    {
+      "question_id": "561fabcd",
+      "input_tokens": 104671,
+      "fits": true
+    },
+    {
+      "question_id": "b759caee",
+      "input_tokens": 104888,
+      "fits": true
+    },
+    {
+      "question_id": "ac031881",
+      "input_tokens": 102553,
+      "fits": true
+    },
+    {
+      "question_id": "28bcfaac",
+      "input_tokens": 105684,
+      "fits": true
+    },
+    {
+      "question_id": "16c90bf4",
+      "input_tokens": 103264,
+      "fits": true
+    },
+    {
+      "question_id": "c8f1aeed",
+      "input_tokens": 102856,
+      "fits": true
+    },
+    {
+      "question_id": "eaca4986",
+      "input_tokens": 103476,
+      "fits": true
+    },
+    {
+      "question_id": "c7cf7dfd",
+      "input_tokens": 102759,
+      "fits": true
+    },
+    {
+      "question_id": "e48988bc",
+      "input_tokens": 104967,
+      "fits": true
+    },
+    {
+      "question_id": "1de5cff2",
+      "input_tokens": 104875,
+      "fits": true
+    },
+    {
+      "question_id": "65240037",
+      "input_tokens": 104282,
+      "fits": true
+    },
+    {
+      "question_id": "778164c6",
+      "input_tokens": 101432,
+      "fits": true
+    }
+  ],
+  "fit_fraction": 1.0,
+  "gate_eligible": true,
+  "min_fit_fraction": 0.8
+}

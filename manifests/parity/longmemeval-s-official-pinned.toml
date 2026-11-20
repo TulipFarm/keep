@@ -1,0 +1,197 @@
+# Parity run on LongMemEval-S under the `longmemeval-official` protocol: the answer
+# prompt, judge prompts, question filter and scoring of the official LongMemEval evaluation (MIT),
+# vendored in crates/keep-bench/protocols/. Covers the development split (345 of 500 questions).
+#
+# Development split: comparable in protocol, not in question set, to
+# published numbers. The full-set variant is the -full file beside this one.
+#
+# Pinned OpenAI models for a canonical comparison. Not yet run.
+schema_version = 1
+id = "parity-longmemeval-s-official-pinned"
+description = "Parity (longmemeval-official, development split): LongMemEval-S, pinned OpenAI models"
+phase = "development"
+seeds = [1]
+
+[protocol]
+name = "longmemeval-official"
+split = "dev"
+
+[dataset]
+kind = "longmemeval-s"
+path = "../../data/longmemeval/longmemeval_s_cleaned.json"
+sha256 = "sha256:d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
+gold_track = "original"
+
+[holdout]
+salt = "keep-longmemeval-s-holdout-v1"
+fraction = 0.3
+commitment = "sha256:6c2ad58a42c74a2002a87149f20cb5cf973b6a84a41ab3d23ce96e71bb9b6559"
+
+# The official evaluation judges with gpt-4o-2024-08-06 and 10 output
+# tokens. Published systems use different readers; gpt-4o is the common one.
+[models.answer]
+provider = "openai-compatible"
+model = "gpt-4o"
+revision = "2024-08-06"
+served_model = "gpt-4o-2024-08-06"
+tokenizer = "tiktoken-o200k-base"
+context_limit = 128000
+max_output_tokens = 800
+temperature = 0.0
+prompt_version = "longmemeval-official-reader-cot-v1"
+timeout_secs = 120
+api_style = "azure-v1"
+auth_header = "api-key"
+base_url_env = "AZURE_FOUNDRY_ENDPOINT"
+api_key_env = "AZURE_FOUNDRY_API_KEY"
+deployment_env = "KEEP_AZURE_ANSWER_DEPLOYMENT"
+input_usd_per_mtok = 2.50
+output_usd_per_mtok = 10.00
+
+[models.judge]
+provider = "openai-compatible"
+model = "gpt-4o"
+revision = "2024-08-06"
+served_model = "gpt-4o-2024-08-06"
+tokenizer = "tiktoken-o200k-base"
+context_limit = 128000
+max_output_tokens = 10
+temperature = 0.0
+prompt_version = "longmemeval-official-judge-v1"
+timeout_secs = 120
+api_style = "azure-v1"
+auth_header = "api-key"
+base_url_env = "AZURE_FOUNDRY_ENDPOINT"
+api_key_env = "AZURE_FOUNDRY_API_KEY"
+deployment_env = "KEEP_AZURE_JUDGE_DEPLOYMENT"
+input_usd_per_mtok = 2.50
+output_usd_per_mtok = 10.00
+
+[models.extract]
+# Reads each session once for keep-mk3 and lists its dated facts (prompt
+# session-facts-v2). Pinned gpt-4o-mini, the cheapest pinned model, whatever
+# the reader. Replies are cached on disk by model, prompt version and
+# session text, so reruns reuse them.
+provider = "openai-compatible"
+model = "gpt-4o-mini"
+revision = "2024-07-18"
+served_model = "gpt-4o-mini-2024-07-18"
+tokenizer = "tiktoken-o200k-base"
+context_limit = 128000
+max_output_tokens = 3000
+temperature = 0.0
+prompt_version = "session-facts-v2"
+timeout_secs = 300
+api_style = "azure-v1"
+auth_header = "api-key"
+base_url_env = "AZURE_FOUNDRY_ENDPOINT"
+api_key_env = "AZURE_FOUNDRY_API_KEY"
+deployment_env = "KEEP_AZURE_EXTRACT_DEPLOYMENT"
+input_usd_per_mtok = 0.15
+output_usd_per_mtok = 0.60
+
+[embedding]
+provider = "local-onnx"
+model = "BAAI/bge-small-en-v1.5"
+revision = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+dimensions = 384
+batch_size = 64
+
+[embedding.local]
+pooling = "cls"
+max_length = 512
+
+[embedding.local.sha256]
+"onnx/model.onnx" = "sha256:828e1496d7fabb79cfa4dcd84fa38625c0d3d21da474a00f08db0f559940cf35"
+"tokenizer.json" = "sha256:d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+"config.json" = "sha256:094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750"
+"special_tokens_map.json" = "sha256:b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3"
+"tokenizer_config.json" = "sha256:9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+
+[reranker]
+# Local cross-encoder that reorders the top fused candidates of the ranked
+# Keep arms (k2, mk2). ms-marco-MiniLM-L6-v2 scores about 440 pairs a second
+# on a 10-core laptop CPU, so reranking 50 candidates adds about 0.1 s per
+# question. Downloaded at run time into KEEP_MODEL_CACHE and checked against
+# these digests.
+provider = "local-onnx"
+model = "cross-encoder/ms-marco-MiniLM-L6-v2"
+revision = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
+max_length = 512
+top_n = 50
+
+[reranker.sha256]
+"onnx/model.onnx" = "sha256:5d3e70fd0c9ff14b9b5169a51e957b7a9c74897afd0a35ce4bd318150c1d4d4a"
+"tokenizer.json" = "sha256:d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+"config.json" = "sha256:380e02c93f431831be65d99a4e7e5f67c133985bf2e77d9d4eba46847190bacc"
+"special_tokens_map.json" = "sha256:3c3507f36dff57bce437223db3b3081d1e2b52ec3e56ee55438193ecb2c94dd6"
+"tokenizer_config.json" = "sha256:a5c2e5a7b1a29a0702cd28c08a399b5ecc110c263009d17f7e3b415f25905fd8"
+
+# Session fact extraction for keep-mk3 ([models.extract]). Fill
+# the cache first with `keep-bench extract`, or let the run extract on
+# first use (counted against the same caps).
+[extraction]
+prompt_version = "session-facts-v2"
+facts_tokens = 1536
+profile_tokens = 512
+expected_output_tokens = 520
+
+[storage]
+profile = "postgres-qdrant"
+
+[retrieval]
+chunking = "turn"
+bm25_k1 = 1.2
+bm25_b = 0.75
+standing_tokens = 4096
+evidence_tokens = 2000
+max_tool_calls = 6
+
+[budget]
+# About 1.5 times the dry-run worst case (docs/benchmarks/parity.md).
+max_model_calls = 29800
+max_input_tokens = 112000000
+max_output_tokens = 76000000
+max_cost_usd = 246.0
+max_attempts = 3
+
+[dispatch]
+allow_model_calls = true
+concurrency = 4
+
+[[arms]]
+name = "full-context"
+kind = "full-context"
+
+# Equal-context baselines: standing_tokens + evidence_tokens, the most the
+# combined Keep arm may inject.
+[[arms]]
+name = "dense-6k"
+kind = "dense"
+budget_tokens = 6096
+top_k = 200
+
+[[arms]]
+name = "bm25-6k"
+kind = "bm25"
+budget_tokens = 6096
+top_k = 200
+
+[[arms]]
+name = "keep-mk2"
+kind = "keep"
+path = "mk2"
+representation = "structured"
+
+# mk2's ranked evidence behind a dated facts block extracted from each
+# session and a Memory profile of the user's stated preferences, with the
+# question's time reference boosting facts and evidence from that period
+# (docs/knowledge.md). The answer prompt stays the protocol's own.
+[[arms]]
+name = "keep-mk3"
+kind = "keep"
+path = "mk3"
+representation = "structured"
+temporal = true
+assistant_route = true
+preferences = true

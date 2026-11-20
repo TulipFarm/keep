@@ -1,0 +1,142 @@
+# Keep quick start: the server and its databases, one storage profile at a
+# time.
+#
+#   docker compose -f deploy/compose.yaml --profile postgres-vector up -d --build --wait
+#   docker compose -f deploy/compose.yaml --profile postgres-qdrant up -d --build --wait
+#
+# A one-shot `secrets` service generates the Postgres password, the API
+# token and the Qdrant API key into a private volume on first start; nothing
+# secret lives in this file. Startup is health-gated: Keep starts after its
+# databases are healthy and is healthy itself only once its ledger answers.
+# Only Keep publishes a port, on 127.0.0.1 (KEEP_PORT, default 7357). The
+# databases are reachable on the project's private network only.
+#
+# The API token:
+#   docker compose -f deploy/compose.yaml --profile postgres-vector \
+#     exec keep-vector cat /run/keep-secrets/api_token
+
+name: ${KEEP_PROJECT_NAME:-keep}
+
+x-keep: &keep
+  image: ${KEEP_IMAGE:-keep:local}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  volumes:
+    - secrets:/run/keep-secrets:ro
+    - keep-data:/var/lib/keep
+  healthcheck:
+    test: ["CMD", "keep", "healthcheck"]
+    interval: 5s
+    timeout: 6s
+    retries: 24
+    start_period: 5s
+
+services:
+  secrets:
+    image: ${KEEP_IMAGE:-keep:local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    profiles: ["postgres-vector", "postgres-qdrant"]
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        umask 022
+        cd /run/keep-secrets
+        for name in postgres_password api_token qdrant_api_key; do
+          if [ ! -s "$$name" ]; then
+            keep token new | head -n 1 > "$$name.tmp"
+            mv "$$name.tmp" "$$name"
+            echo "generated $$name"
+          fi
+        done
+        chmod 0444 postgres_password api_token qdrant_api_key
+    volumes:
+      - secrets:/run/keep-secrets
+    restart: "no"
+
+  postgres:
+    image: pgvector/pgvector:0.8.2-pg18@sha256:42e7f6b4e1eceb02ff14e3e6bc6108bbe259abbe83879dc1845d0da1ddeb555d
+    profiles: ["postgres-vector", "postgres-qdrant"]
+    environment:
+      POSTGRES_USER: keep
+      POSTGRES_DB: keep
+      POSTGRES_PASSWORD_FILE: /run/keep-secrets/postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - secrets:/run/keep-secrets:ro
+    depends_on:
+      secrets:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keep -d keep"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0@sha256:9bfc89f9914fc14876a88c05270685921a55b8877b254a98bcc1cc2f0a424cd2
+    profiles: ["postgres-qdrant"]
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - QDRANT__SERVICE__API_KEY="$$(cat /run/keep-secrets/qdrant_api_key)" exec ./entrypoint.sh
+    volumes:
+      - qdrant-data:/qdrant/storage
+      - secrets:/run/keep-secrets:ro
+    depends_on:
+      secrets:
+        condition: service_completed_successfully
+    healthcheck:
+      # The image has no curl; /readyz needs no API key.
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/127.0.0.1/6333 && printf 'GET /readyz HTTP/1.0\r\n\r\n' >&3 && grep -q ' 200 ' <&3
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  keep-vector:
+    <<: *keep
+    profiles: ["postgres-vector"]
+    environment:
+      KEEP_STORAGE: postgres-vector
+      KEEP_BIND: 0.0.0.0:7357
+      # Inside the container network; the host port below is loopback-only.
+      KEEP_INSECURE_HTTP: "true"
+    ports:
+      - "127.0.0.1:${KEEP_PORT:-7357}:7357"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  keep-qdrant:
+    <<: *keep
+    profiles: ["postgres-qdrant"]
+    environment:
+      KEEP_STORAGE: postgres-qdrant
+      KEEP_BIND: 0.0.0.0:7357
+      KEEP_INSECURE_HTTP: "true"
+    ports:
+      - "127.0.0.1:${KEEP_PORT:-7357}:7357"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
+volumes:
+  secrets:
+  postgres-data:
+  qdrant-data:
+  keep-data:

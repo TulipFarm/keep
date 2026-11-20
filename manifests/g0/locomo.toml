@@ -1,0 +1,190 @@
+# G0: first canonical run on LoCoMo (development split only; the sealed
+# holdout is never loaded). LoCoMo is CC BY-NC 4.0: non-commercial use only.
+# See docs/benchmarks/running-g0.md. Needs a build with
+# `--features local-embeddings`, the Azure variables in that page, and
+# `--allow-model-calls`.
+schema_version = 1
+id = "g0-locomo"
+description = "G0 canonical baseline: LoCoMo development split, gpt-4o-mini answers, gpt-4o judge"
+phase = "development"
+seeds = [1]
+# Length-only fit mask for gpt-4o-mini's 128K window, from `keep-bench fit-mask`.
+fit_mask = { path = "locomo.fit-mask.json", sha256 = "sha256:d581916a8b444d7d3e85e944bef676d908dfde3fe2ea782787fa77fea6183e21" }
+
+[dataset]
+kind = "locomo"
+path = "../../data/locomo/locomo10.json"
+sha256 = "sha256:79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4"
+gold_track = "original"
+
+[holdout]
+salt = "keep-locomo-holdout-v1"
+fraction = 0.3
+commitment = "sha256:fcb8fd651affba4d8d8acd1674d1ac2c362cc8a240b1994847075d50ff5f6a4d"
+
+[models.answer]
+# Azure OpenAI v1 endpoint: `model` is the deployment name, read from
+# deployment_env. Every reply must report served_model or the run aborts.
+provider = "openai-compatible"
+model = "gpt-4o-mini"
+revision = "2024-07-18"
+served_model = "gpt-4o-mini-2024-07-18"
+tokenizer = "tiktoken-o200k-base"
+context_limit = 128000
+max_output_tokens = 256
+temperature = 0.0
+prompt_version = "answer-v1"
+timeout_secs = 120
+api_style = "azure-v1"
+auth_header = "api-key"
+base_url_env = "AZURE_FOUNDRY_ENDPOINT"
+api_key_env = "AZURE_FOUNDRY_API_KEY"
+deployment_env = "KEEP_AZURE_ANSWER_DEPLOYMENT"
+# Global Standard list price, USD per million tokens (Azure Retail Prices
+# API, meters "gpt-4o-mini-0718 Inp-glbl" / "Outp-glbl", checked 2026-11-13;
+# the same as OpenAI's list price).
+input_usd_per_mtok = 0.15
+output_usd_per_mtok = 0.60
+
+[models.judge]
+provider = "openai-compatible"
+model = "gpt-4o"
+revision = "2024-08-06"
+served_model = "gpt-4o-2024-08-06"
+tokenizer = "tiktoken-o200k-base"
+context_limit = 128000
+max_output_tokens = 16
+temperature = 0.0
+prompt_version = "judge-v1"
+timeout_secs = 120
+api_style = "azure-v1"
+auth_header = "api-key"
+base_url_env = "AZURE_FOUNDRY_ENDPOINT"
+api_key_env = "AZURE_FOUNDRY_API_KEY"
+deployment_env = "KEEP_AZURE_JUDGE_DEPLOYMENT"
+# Meters "gpt-4o-0806 Inp-glbl" / "Outp-glbl", checked 2026-11-13.
+input_usd_per_mtok = 2.50
+output_usd_per_mtok = 10.00
+
+[embedding]
+provider = "local-onnx"
+model = "BAAI/bge-small-en-v1.5"
+revision = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+dimensions = 384
+batch_size = 64
+
+[embedding.local]
+pooling = "cls"
+max_length = 512
+
+[embedding.local.sha256]
+"onnx/model.onnx" = "sha256:828e1496d7fabb79cfa4dcd84fa38625c0d3d21da474a00f08db0f559940cf35"
+"tokenizer.json" = "sha256:d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+"config.json" = "sha256:094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750"
+"special_tokens_map.json" = "sha256:b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3"
+"tokenizer_config.json" = "sha256:9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+
+[storage]
+profile = "postgres-qdrant"
+
+[retrieval]
+chunking = "turn"
+bm25_k1 = 1.2
+bm25_b = 0.75
+standing_tokens = 4096
+evidence_tokens = 2000
+max_tool_calls = 6
+
+[budget]
+# Caps sit above the dry-run worst case (every answer and verdict at
+# max_output_tokens, inputs plus the reservation margin), with room for
+# retries. The cross-run spend ledger reserves max_cost_usd before the
+# first call. See docs/benchmarks/running-g0.md for the estimate.
+max_model_calls = 40000
+max_input_tokens = 100000000
+max_output_tokens = 5500000
+max_cost_usd = 45.0
+max_attempts = 3
+
+[dispatch]
+# Still refused unless the command also passes --allow-model-calls.
+allow_model_calls = true
+concurrency = 4
+
+[[arms]]
+name = "no-memory"
+kind = "no-memory"
+
+[[arms]]
+name = "full-context"
+kind = "full-context"
+
+[[arms]]
+name = "recent-window"
+kind = "recent-window"
+budget_tokens = 6096
+
+[[arms]]
+name = "bm25"
+kind = "bm25"
+budget_tokens = 2000
+top_k = 20
+
+[[arms]]
+name = "dense"
+kind = "dense"
+budget_tokens = 2000
+top_k = 20
+
+# Equal-context baselines: standing_tokens + evidence_tokens, the most a
+# combined Keep arm (mk0, mk1) may inject.
+[[arms]]
+name = "bm25-6k"
+kind = "bm25"
+budget_tokens = 6096
+top_k = 200
+
+[[arms]]
+name = "dense-6k"
+kind = "dense"
+budget_tokens = 6096
+top_k = 200
+
+[[arms]]
+name = "notes-grep"
+kind = "notes-grep"
+budget_tokens = 2000
+
+[[arms]]
+name = "oracle-evidence"
+kind = "oracle-evidence"
+
+[[arms]]
+name = "keep-m"
+kind = "keep"
+path = "m"
+representation = "structured"
+
+[[arms]]
+name = "keep-k0"
+kind = "keep"
+path = "k0"
+representation = "structured"
+
+[[arms]]
+name = "keep-k1"
+kind = "keep"
+path = "k1"
+representation = "structured"
+
+[[arms]]
+name = "keep-mk0"
+kind = "keep"
+path = "mk0"
+representation = "structured"
+
+[[arms]]
+name = "keep-mk1"
+kind = "keep"
+path = "mk1"
+representation = "structured"

@@ -1,0 +1,86 @@
+# Offline fixture for the Knowledge arms: K0 (search only) and K1 (search plus
+# the level-0 table of contents) next to full-context and BM25 references, with mock providers.
+# MK1 adds Memory to K1.
+schema_version = 1
+id = "fixture-knowledge-mock"
+description = "Knowledge arms on the synthetic LongMemEval-shaped fixture with offline mock providers"
+phase = "development"
+seeds = [1, 2, 3]
+
+[dataset]
+kind = "longmemeval-s"
+path = "../longmemeval-mini.json"
+sha256 = "sha256:1ec1c252d235236becd0664ca8937650bcf6b8a5ad3b8f5629e85547a9d60210"
+annotations = { path = "../annotations-empty.toml", sha256 = "sha256:240f2fe79c687b4eaab208f6c3cd72a42b567d07a29671385878fbd3a813c166" }
+
+[holdout]
+salt = "fixture-holdout-v1"
+fraction = 0.25
+commitment = "sha256:1cd896a3192b353c565092d67d7717fffd2794209edd829db2d0e0a43c45547b"
+
+[models.answer]
+provider = "mock"
+model = "mock-extractive"
+revision = "v1"
+tokenizer = "approx-v1"
+context_limit = 4096
+max_output_tokens = 64
+prompt_version = "answer-v1"
+
+[models.judge]
+provider = "mock"
+model = "mock-f1-judge"
+revision = "v1"
+tokenizer = "approx-v1"
+context_limit = 4096
+max_output_tokens = 8
+prompt_version = "judge-v1"
+
+[embedding]
+provider = "hash"
+model = "hash-embedder"
+revision = "v1"
+dimensions = 64
+
+[storage]
+profile = "in-memory"
+
+[retrieval]
+chunking = "turn"
+bm25_k1 = 1.2
+bm25_b = 0.75
+standing_tokens = 1024
+evidence_tokens = 256
+max_tool_calls = 6
+
+[budget]
+max_model_calls = 0
+max_input_tokens = 0
+max_output_tokens = 0
+max_cost_usd = 0.0
+max_attempts = 1
+
+[[arms]]
+name = "full-context"
+kind = "full-context"
+
+[[arms]]
+name = "bm25"
+kind = "bm25"
+budget_tokens = 256
+top_k = 8
+
+[[arms]]
+name = "keep-k0"
+kind = "keep"
+path = "k0"
+
+[[arms]]
+name = "keep-k1"
+kind = "keep"
+path = "k1"
+
+[[arms]]
+name = "keep-mk1"
+kind = "keep"
+path = "mk1"

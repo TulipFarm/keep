@@ -1,0 +1,106 @@
+# Offline fixture: synthetic data, mock answerer and judge, hash embedder,
+# in-memory vectors. Exercises every code path without any network access.
+schema_version = 1
+id = "fixture-locomo-mock"
+description = "Synthetic LoCoMo-shaped fixture with offline mock providers"
+phase = "development"
+seeds = [1, 2, 3]
+
+[dataset]
+kind = "locomo"
+path = "../locomo-mini.json"
+sha256 = "sha256:8dcc1b501a803cd80df7e83946edd8f4b11fd2d5bd4edd513983fb289bf49e70"
+annotations = { path = "../annotations-empty.toml", sha256 = "sha256:240f2fe79c687b4eaab208f6c3cd72a42b567d07a29671385878fbd3a813c166" }
+
+[holdout]
+salt = "fixture-holdout-v1"
+fraction = 0.34
+commitment = "sha256:ada11103523ab9a5769d044008d80c0e56d95a3fea2898c16455ef1cc8660cb7"
+
+[models.answer]
+provider = "mock"
+model = "mock-extractive"
+revision = "v1"
+tokenizer = "approx-v1"
+context_limit = 4096
+max_output_tokens = 64
+prompt_version = "answer-v1"
+
+[models.judge]
+provider = "mock"
+model = "mock-f1-judge"
+revision = "v1"
+tokenizer = "approx-v1"
+context_limit = 4096
+max_output_tokens = 8
+prompt_version = "judge-v1"
+
+[embedding]
+provider = "hash"
+model = "hash-embedder"
+revision = "v1"
+dimensions = 64
+
+[storage]
+profile = "in-memory"
+
+[retrieval]
+chunking = "turn"
+bm25_k1 = 1.2
+bm25_b = 0.75
+standing_tokens = 1024
+evidence_tokens = 256
+max_tool_calls = 6
+
+[budget]
+max_model_calls = 0
+max_input_tokens = 0
+max_output_tokens = 0
+max_cost_usd = 0.0
+max_attempts = 1
+
+[[arms]]
+name = "no-memory"
+kind = "no-memory"
+
+[[arms]]
+name = "full-context"
+kind = "full-context"
+
+[[arms]]
+name = "recent-window"
+kind = "recent-window"
+budget_tokens = 256
+
+[[arms]]
+name = "bm25"
+kind = "bm25"
+budget_tokens = 256
+top_k = 8
+
+[[arms]]
+name = "dense"
+kind = "dense"
+budget_tokens = 256
+top_k = 8
+
+[[arms]]
+name = "notes-grep"
+kind = "notes-grep"
+budget_tokens = 256
+
+[[arms]]
+name = "filesystem-agent"
+kind = "filesystem-agent"
+budget_tokens = 256
+max_steps = 6
+
+[[arms]]
+name = "oracle-evidence"
+kind = "oracle-evidence"
+
+[[arms]]
+name = "keep-mk1"
+kind = "keep"
+path = "mk1"
+representation = "structured"

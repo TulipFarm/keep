@@ -1,0 +1,23 @@
+[package]
+name = "keep-qdrant"
+description = "Qdrant vector adapter for Keep's postgres-qdrant profile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+keep-store.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

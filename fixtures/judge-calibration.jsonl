@@ -1,0 +1,6 @@
+{"id":"h1","question":"When did Mira move to Lisbon?","gold":"March 2021","candidate":"She moved there in March 2021.","expected_correct":true,"probe":"human"}
+{"id":"h2","question":"When did Mira move to Lisbon?","gold":"March 2021","candidate":"March 2022","expected_correct":false,"probe":"human"}
+{"id":"h3","question":"What pet did Tomas adopt?","gold":"a grey cat called Pebble","candidate":"A cat named Pebble.","expected_correct":true,"probe":"human"}
+{"id":"h4","question":"What pet did Tomas adopt?","gold":"a grey cat called Pebble","candidate":"A terrier called Biscuit.","expected_correct":false,"probe":"human"}
+{"id":"h5","question":"What is the name of Mira's sailing boat?","gold":"Not mentioned in the conversation","candidate":"I don't know.","abstention":true,"expected_correct":true,"probe":"human"}
+{"id":"h6","question":"What is the name of Mira's sailing boat?","gold":"Not mentioned in the conversation","candidate":"The Swift","abstention":true,"expected_correct":false,"probe":"human"}

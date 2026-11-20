@@ -1,0 +1,54 @@
+[package]
+name = "keep-server"
+description = "Keep's MCP (stdio) and HTTP server over shared Memory and Knowledge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "keep"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+clap = { workspace = true, features = ["env"] }
+keep-knowledge.workspace = true
+keep-ledger.workspace = true
+keep-memory.workspace = true
+keep-providers.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+reqwest.workspace = true
+uuid.workspace = true
+subtle = "2.6"
+toml.workspace = true
+rand.workspace = true
+keep-store.workspace = true
+keep-postgres.workspace = true
+keep-qdrant.workspace = true
+tokio-postgres.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio = { workspace = true, features = ["sync", "signal", "io-std"] }
+
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+tower.workspace = true
+
+[features]
+# The local ONNX embedder (BAAI/bge-small-en-v1.5 through fastembed). When
+# compiled in it is the default; the model is downloaded once into the
+# model cache.
+local-embeddings = ["keep-providers/local-embeddings"]
+
+[lints]
+workspace = true

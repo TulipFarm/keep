@@ -1,0 +1,688 @@
+[
+ {
+  "sample_id": "synth-1",
+  "conversation": {
+   "speaker_a": "Mira",
+   "speaker_b": "Tomas",
+   "session_1_date_time": "1:56 pm on 8 May, 2021",
+   "session_1": [
+    {
+     "speaker": "Mira",
+     "dia_id": "D1:1",
+     "text": "Hi Tomas! I finally started a solar kiln last week."
+    },
+    {
+     "speaker": "Tomas",
+     "dia_id": "D1:2",
+     "text": "That's great, Mira. Where are you building it?"
+    },
+    {
+     "speaker": "Mira",
+     "dia_id": "D1:3",
+     "text": "In Lisbon, near my aunt's workshop."
+    },
+    {
+     "speaker": "Tomas",
+     "dia_id": "D1:4",
+     "text": "I just adopted a grey cat called Pebble.",
+     "img_url": [
+      "https://example.invalid/pet.jpg"
+     ],
+     "blip_caption": "a photo of a small animal on a sofa"
+    }
+   ],
+   "session_2_date_time": "10:15 am on 2 June, 2021",
+   "session_2": [
+    {
+     "speaker": "Mira",
+     "dia_id": "D2:1",
+     "text": "Big news: I moved to Lisbon for good in March 2021."
+    },
+    {
+     "speaker": "Tomas",
+     "dia_id": "D2:2",
+     "text": "Congratulations! How is the project going?"
+    },
+    {
+     "speaker": "Mira",
+     "dia_id": "D2:3",
+     "text": "Slowly. I want to finish a solar kiln before the winter."
+    },
+    {
+     "speaker": "Tomas",
+     "dia_id": "D2:4",
+     "text": "I started learning the cello, by the way."
+    }
+   ],
+   "session_3_date_time": "7:30 pm on 20 August, 2021",
+   "session_3": [
+    {
+     "speaker": "Tomas",
+     "dia_id": "D3:1",
+     "text": "I played my first cello recital yesterday."
+    },
+    {
+     "speaker": "Mira",
+     "dia_id": "D3:2",
+     "text": "Amazing. I wish I could have been there."
+    }
+   ]
+  },
+  "qa": [
+   {
+    "question": "What did Mira start?",
+    "answer": "a solar kiln",
+    "evidence": [
+     "D1:1"
+    ],
+    "category": 4
+   },
+   {
+    "question": "When did Mira move to Lisbon?",
+    "answer": "March 2021",
+    "evidence": [
+     "D2:1"
+    ],
+    "category": 2
+   },
+   {
+    "question": "What pet did Tomas adopt?",
+    "answer": "a grey cat called Pebble",
+    "evidence": [
+     "D1:4"
+    ],
+    "category": 1
+   },
+   {
+    "question": "Which instrument does Tomas play, and where did Mira move?",
+    "answer": "cello; Lisbon",
+    "evidence": [
+     "D2:4; D2:1"
+    ],
+    "category": 3
+   },
+   {
+    "question": "What is the name of Mira's sailing boat?",
+    "adversarial_answer": "The Swift",
+    "evidence": [],
+    "category": 5
+   },
+   {
+    "question": "Which city is the workshop in?",
+    "answer": "Lisbon",
+    "evidence": [
+     "D9:99"
+    ],
+    "category": 4
+   }
+  ],
+  "event_summary": {},
+  "observation": {},
+  "session_summary": {}
+ },
+ {
+  "sample_id": "synth-2",
+  "conversation": {
+   "speaker_a": "Ada",
+   "speaker_b": "Kofi",
+   "session_1_date_time": "1:56 pm on 8 May, 2022",
+   "session_1": [
+    {
+     "speaker": "Ada",
+     "dia_id": "D1:1",
+     "text": "Hi Kofi! I finally started a tide-pool survey last week."
+    },
+    {
+     "speaker": "Kofi",
+     "dia_id": "D1:2",
+     "text": "That's great, Ada. Where are you building it?"
+    },
+    {
+     "speaker": "Ada",
+     "dia_id": "D1:3",
+     "text": "In Oslo, near my aunt's workshop."
+    },
+    {
+     "speaker": "Kofi",
+     "dia_id": "D1:4",
+     "text": "I just adopted a terrier called Biscuit.",
+     "img_url": [
+      "https://example.invalid/pet.jpg"
+     ],
+     "blip_caption": "a photo of a small animal on a sofa"
+    }
+   ],
+   "session_2_date_time": "10:15 am on 2 June, 2022",
+   "session_2": [
+    {
+     "speaker": "Ada",
+     "dia_id": "D2:1",
+     "text": "Big news: I moved to Oslo for good in March 2022."
+    },
+    {
+     "speaker": "Kofi",
+     "dia_id": "D2:2",
+     "text": "Congratulations! How is the project going?"
+    },
+    {
+     "speaker": "Ada",
+     "dia_id": "D2:3",
+     "text": "Slowly. I want to finish a tide-pool survey before the winter."
+    },
+    {
+     "speaker": "Kofi",
+     "dia_id": "D2:4",
+     "text": "I started learning the cello, by the way."
+    }
+   ],
+   "session_3_date_time": "7:30 pm on 20 August, 2022",
+   "session_3": [
+    {
+     "speaker": "Kofi",
+     "dia_id": "D3:1",
+     "text": "I played my first cello recital yesterday."
+    },
+    {
+     "speaker": "Ada",
+     "dia_id": "D3:2",
+     "text": "Amazing. I wish I could have been there."
+    }
+   ]
+  },
+  "qa": [
+   {
+    "question": "What did Ada start?",
+    "answer": "a tide-pool survey",
+    "evidence": [
+     "D1:1"
+    ],
+    "category": 4
+   },
+   {
+    "question": "When did Ada move to Oslo?",
+    "answer": "March 2022",
+    "evidence": [
+     "D2:1"
+    ],
+    "category": 2
+   },
+   {
+    "question": "What pet did Kofi adopt?",
+    "answer": "a terrier called Biscuit",
+    "evidence": [
+     "D1:4"
+    ],
+    "category": 1
+   },
+   {
+    "question": "Which instrument does Kofi play, and where did Ada move?",
+    "answer": "cello; Oslo",
+    "evidence": [
+     "D2:4; D2:1"
+    ],
+    "category": 3
+   },
+   {
+    "question": "What is the name of Ada's sailing boat?",
+    "adversarial_answer": "The Swift",
+    "evidence": [],
+    "category": 5
+   }
+  ],
+  "event_summary": {},
+  "observation": {},
+  "session_summary": {}
+ },
+ {
+  "sample_id": "synth-3",
+  "conversation": {
+   "speaker_a": "Lena",
+   "speaker_b": "Ravi",
+   "session_1_date_time": "1:56 pm on 8 May, 2023",
+   "session_1": [
+    {
+     "speaker": "Lena",
+     "dia_id": "D1:1",
+     "text": "Hi Ravi! I finally started a community radio last week."
+    },
+    {
+     "speaker": "Ravi",
+     "dia_id": "D1:2",
+     "text": "That's great, Lena. Where are you building it?"
+    },
+    {
+     "speaker": "Lena",
+     "dia_id": "D1:3",
+     "text": "In Accra, near my aunt's workshop."
+    },
+    {
+     "speaker": "Ravi",
+     "dia_id": "D1:4",
+     "text": "I just adopted a parrot called Juno.",
+     "img_url": [
+      "https://example.invalid/pet.jpg"
+     ],
+     "blip_caption": "a photo of a small animal on a sofa"
+    }
+   ],
+   "session_2_date_time": "10:15 am on 2 June, 2023",
+   "session_2": [
+    {
+     "speaker": "Lena",
+     "dia_id": "D2:1",
+     "text": "Big news: I moved to Accra for good in March 2023."
+    },
+    {
+     "speaker": "Ravi",
+     "dia_id": "D2:2",
+     "text": "Congratulations! How is the project going?"
+    },
+    {
+     "speaker": "Lena",
+     "dia_id": "D2:3",
+     "text": "Slowly. I want to finish a community radio before the winter."
+    },
+    {
+     "speaker": "Ravi",
+     "dia_id": "D2:4",
+     "text": "I started learning the cello, by the way."
+    }
+   ],
+   "session_3_date_time": "7:30 pm on 20 August, 2023",
+   "session_3": [
+    {
+     "speaker": "Ravi",
+     "dia_id": "D3:1",
+     "text": "I played my first cello recital yesterday."
+    },
+    {
+     "speaker": "Lena",
+     "dia_id": "D3:2",
+     "text": "Amazing. I wish I could have been there."
+    }
+   ]
+  },
+  "qa": [
+   {
+    "question": "What did Lena start?",
+    "answer": "a community radio",
+    "evidence": [
+     "D1:1"
+    ],
+    "category": 4
+   },
+   {
+    "question": "When did Lena move to Accra?",
+    "answer": "March 2023",
+    "evidence": [
+     "D2:1"
+    ],
+    "category": 2
+   },
+   {
+    "question": "What pet did Ravi adopt?",
+    "answer": "a parrot called Juno",
+    "evidence": [
+     "D1:4"
+    ],
+    "category": 1
+   },
+   {
+    "question": "Which instrument does Ravi play, and where did Lena move?",
+    "answer": "cello; Accra",
+    "evidence": [
+     "D2:4; D2:1"
+    ],
+    "category": 3
+   },
+   {
+    "question": "What is the name of Lena's sailing boat?",
+    "adversarial_answer": "The Swift",
+    "evidence": [],
+    "category": 5
+   }
+  ],
+  "event_summary": {},
+  "observation": {},
+  "session_summary": {}
+ },
+ {
+  "sample_id": "synth-4",
+  "conversation": {
+   "speaker_a": "Nora",
+   "speaker_b": "Ilya",
+   "session_1_date_time": "1:56 pm on 8 May, 2021",
+   "session_1": [
+    {
+     "speaker": "Nora",
+     "dia_id": "D1:1",
+     "text": "Hi Ilya! I finally started a seed library last week."
+    },
+    {
+     "speaker": "Ilya",
+     "dia_id": "D1:2",
+     "text": "That's great, Nora. Where are you building it?"
+    },
+    {
+     "speaker": "Nora",
+     "dia_id": "D1:3",
+     "text": "In Hanoi, near my aunt's workshop."
+    },
+    {
+     "speaker": "Ilya",
+     "dia_id": "D1:4",
+     "text": "I just adopted a tortoise called Sage.",
+     "img_url": [
+      "https://example.invalid/pet.jpg"
+     ],
+     "blip_caption": "a photo of a small animal on a sofa"
+    }
+   ],
+   "session_2_date_time": "10:15 am on 2 June, 2021",
+   "session_2": [
+    {
+     "speaker": "Nora",
+     "dia_id": "D2:1",
+     "text": "Big news: I moved to Hanoi for good in March 2021."
+    },
+    {
+     "speaker": "Ilya",
+     "dia_id": "D2:2",
+     "text": "Congratulations! How is the project going?"
+    },
+    {
+     "speaker": "Nora",
+     "dia_id": "D2:3",
+     "text": "Slowly. I want to finish a seed library before the winter."
+    },
+    {
+     "speaker": "Ilya",
+     "dia_id": "D2:4",
+     "text": "I started learning the cello, by the way."
+    }
+   ],
+   "session_3_date_time": "7:30 pm on 20 August, 2021",
+   "session_3": [
+    {
+     "speaker": "Ilya",
+     "dia_id": "D3:1",
+     "text": "I played my first cello recital yesterday."
+    },
+    {
+     "speaker": "Nora",
+     "dia_id": "D3:2",
+     "text": "Amazing. I wish I could have been there."
+    }
+   ]
+  },
+  "qa": [
+   {
+    "question": "What did Nora start?",
+    "answer": "a seed library",
+    "evidence": [
+     "D1:1"
+    ],
+    "category": 4
+   },
+   {
+    "question": "When did Nora move to Hanoi?",
+    "answer": "March 2021",
+    "evidence": [
+     "D2:1"
+    ],
+    "category": 2
+   },
+   {
+    "question": "What pet did Ilya adopt?",
+    "answer": "a tortoise called Sage",
+    "evidence": [
+     "D1:4"
+    ],
+    "category": 1
+   },
+   {
+    "question": "Which instrument does Ilya play, and where did Nora move?",
+    "answer": "cello; Hanoi",
+    "evidence": [
+     "D2:4; D2:1"
+    ],
+    "category": 3
+   },
+   {
+    "question": "What is the name of Nora's sailing boat?",
+    "adversarial_answer": "The Swift",
+    "evidence": [],
+    "category": 5
+   }
+  ],
+  "event_summary": {},
+  "observation": {},
+  "session_summary": {}
+ },
+ {
+  "sample_id": "synth-5",
+  "conversation": {
+   "speaker_a": "Sana",
+   "speaker_b": "Joel",
+   "session_1_date_time": "1:56 pm on 8 May, 2022",
+   "session_1": [
+    {
+     "speaker": "Sana",
+     "dia_id": "D1:1",
+     "text": "Hi Joel! I finally started a bike co-op last week."
+    },
+    {
+     "speaker": "Joel",
+     "dia_id": "D1:2",
+     "text": "That's great, Sana. Where are you building it?"
+    },
+    {
+     "speaker": "Sana",
+     "dia_id": "D1:3",
+     "text": "In Quito, near my aunt's workshop."
+    },
+    {
+     "speaker": "Joel",
+     "dia_id": "D1:4",
+     "text": "I just adopted a beagle called Olive.",
+     "img_url": [
+      "https://example.invalid/pet.jpg"
+     ],
+     "blip_caption": "a photo of a small animal on a sofa"
+    }
+   ],
+   "session_2_date_time": "10:15 am on 2 June, 2022",
+   "session_2": [
+    {
+     "speaker": "Sana",
+     "dia_id": "D2:1",
+     "text": "Big news: I moved to Quito for good in March 2022."
+    },
+    {
+     "speaker": "Joel",
+     "dia_id": "D2:2",
+     "text": "Congratulations! How is the project going?"
+    },
+    {
+     "speaker": "Sana",
+     "dia_id": "D2:3",
+     "text": "Slowly. I want to finish a bike co-op before the winter."
+    },
+    {
+     "speaker": "Joel",
+     "dia_id": "D2:4",
+     "text": "I started learning the cello, by the way."
+    }
+   ],
+   "session_3_date_time": "7:30 pm on 20 August, 2022",
+   "session_3": [
+    {
+     "speaker": "Joel",
+     "dia_id": "D3:1",
+     "text": "I played my first cello recital yesterday."
+    },
+    {
+     "speaker": "Sana",
+     "dia_id": "D3:2",
+     "text": "Amazing. I wish I could have been there."
+    }
+   ]
+  },
+  "qa": [
+   {
+    "question": "What did Sana start?",
+    "answer": "a bike co-op",
+    "evidence": [
+     "D1:1"
+    ],
+    "category": 4
+   },
+   {
+    "question": "When did Sana move to Quito?",
+    "answer": "March 2022",
+    "evidence": [
+     "D2:1"
+    ],
+    "category": 2
+   },
+   {
+    "question": "What pet did Joel adopt?",
+    "answer": "a beagle called Olive",
+    "evidence": [
+     "D1:4"
+    ],
+    "category": 1
+   },
+   {
+    "question": "Which instrument does Joel play, and where did Sana move?",
+    "answer": "cello; Quito",
+    "evidence": [
+     "D2:4; D2:1"
+    ],
+    "category": 3
+   },
+   {
+    "question": "What is the name of Sana's sailing boat?",
+    "adversarial_answer": "The Swift",
+    "evidence": [],
+    "category": 5
+   }
+  ],
+  "event_summary": {},
+  "observation": {},
+  "session_summary": {}
+ },
+ {
+  "sample_id": "synth-6",
+  "conversation": {
+   "speaker_a": "Pia",
+   "speaker_b": "Bruno",
+   "session_1_date_time": "1:56 pm on 8 May, 2023",
+   "session_1": [
+    {
+     "speaker": "Pia",
+     "dia_id": "D1:1",
+     "text": "Hi Bruno! I finally started a puppet theatre last week."
+    },
+    {
+     "speaker": "Bruno",
+     "dia_id": "D1:2",
+     "text": "That's great, Pia. Where are you building it?"
+    },
+    {
+     "speaker": "Pia",
+     "dia_id": "D1:3",
+     "text": "In Tallinn, near my aunt's workshop."
+    },
+    {
+     "speaker": "Bruno",
+     "dia_id": "D1:4",
+     "text": "I just adopted a rabbit called Fennel.",
+     "img_url": [
+      "https://example.invalid/pet.jpg"
+     ],
+     "blip_caption": "a photo of a small animal on a sofa"
+    }
+   ],
+   "session_2_date_time": "10:15 am on 2 June, 2023",
+   "session_2": [
+    {
+     "speaker": "Pia",
+     "dia_id": "D2:1",
+     "text": "Big news: I moved to Tallinn for good in March 2023."
+    },
+    {
+     "speaker": "Bruno",
+     "dia_id": "D2:2",
+     "text": "Congratulations! How is the project going?"
+    },
+    {
+     "speaker": "Pia",
+     "dia_id": "D2:3",
+     "text": "Slowly. I want to finish a puppet theatre before the winter."
+    },
+    {
+     "speaker": "Bruno",
+     "dia_id": "D2:4",
+     "text": "I started learning the cello, by the way."
+    }
+   ],
+   "session_3_date_time": "7:30 pm on 20 August, 2023",
+   "session_3": [
+    {
+     "speaker": "Bruno",
+     "dia_id": "D3:1",
+     "text": "I played my first cello recital yesterday."
+    },
+    {
+     "speaker": "Pia",
+     "dia_id": "D3:2",
+     "text": "Amazing. I wish I could have been there."
+    }
+   ]
+  },
+  "qa": [
+   {
+    "question": "What did Pia start?",
+    "answer": "a puppet theatre",
+    "evidence": [
+     "D1:1"
+    ],
+    "category": 4
+   },
+   {
+    "question": "When did Pia move to Tallinn?",
+    "answer": "March 2023",
+    "evidence": [
+     "D2:1"
+    ],
+    "category": 2
+   },
+   {
+    "question": "What pet did Bruno adopt?",
+    "answer": "a rabbit called Fennel",
+    "evidence": [
+     "D1:4"
+    ],
+    "category": 1
+   },
+   {
+    "question": "Which instrument does Bruno play, and where did Pia move?",
+    "answer": "cello; Tallinn",
+    "evidence": [
+     "D2:4; D2:1"
+    ],
+    "category": 3
+   },
+   {
+    "question": "What is the name of Pia's sailing boat?",
+    "adversarial_answer": "The Swift",
+    "evidence": [],
+    "category": 5
+   }
+  ],
+  "event_summary": {},
+  "observation": {},
+  "session_summary": {}
+ }
+]

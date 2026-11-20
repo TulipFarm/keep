@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Clippy with the local embedding model
+        run: cargo clippy -p keep-server --all-targets --locked --features local-embeddings -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: Offline dry run on fixtures
+        run: |
+          cargo run --locked -p keep-bench -- validate-manifest fixtures/manifests/longmemeval-mock.toml
+          cargo run --locked -p keep-bench -- dry-run fixtures/manifests/longmemeval-mock.toml
+          cargo run --locked -p keep-bench -- dry-run fixtures/manifests/locomo-mock.toml
+
+  databases:
+    name: storage adapters
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: docker compose --profile postgres-qdrant up -d --wait
+      - run: cargo test --locked -p keep-postgres -p keep-qdrant -p keep-server
+        env:
+          KEEP_TEST_POSTGRES_URL: postgres://keep:keep-local-only@127.0.0.1:15433/keep
+          KEEP_TEST_QDRANT_URL: http://127.0.0.1:16333
+      - run: docker compose --profile postgres-qdrant down -v
+        if: always()

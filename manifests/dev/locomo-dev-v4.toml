@@ -1,0 +1,334 @@
+# Version 4 ablation on LoCoMo development questions, through the
+# Copilot CLI. NON-CANONICAL; development split only. Same settings as
+# manifests/g0/locomo-copilot-v4.toml, on a fixed subset, with arms for each
+# step from mk3 to mk4:
+#   keep-mk3        G0 v3's arm, unchanged (answer-v3)
+#   keep-mk3-p4     + the answer-v4 prompt
+#   keep-mk3-p4s    + subject grounding
+#   keep-mk3-p4ss   + session summaries
+#   keep-mk3-p4x    + entity expansion instead of summaries
+#   keep-mk3-p4ssx  + summaries and entity expansion
+#   keep-k3-p4ssx   the same on k3
+#   keep-mk4        = keep-mk3-p4ss, as in G0 v4 (expansion left out)
+# plus keep-k3, keep-k4, and the baselines dense-6k and full-context with
+# both prompts. Run a step with `--arms`.
+schema_version = 1
+id = "dev-locomo-v4"
+description = "Version 4 ablation (non-canonical) on 300 LoCoMo development questions through the Copilot CLI: answer-v4, subject grounding, session summaries and entity expansion"
+phase = "development"
+track = "development"
+seeds = [1]
+# Length-only fit mask for the assumed 125,000-token budget, from `keep-bench fit-mask`.
+fit_mask = { path = "../g0/locomo-copilot.fit-mask.json", sha256 = "sha256:bf3df05fa340a2629a52b617d4cbb3ba4610f677c5ce90b9e0bbe11b6334724a" }
+
+[dataset]
+kind = "locomo"
+path = "../../data/locomo/locomo10.json"
+sha256 = "sha256:79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4"
+gold_track = "original"
+subset = { path = "locomo-dev-v4.subset.txt", sha256 = "sha256:a338a25a5e7e3bb7fef1dc6ae592f57e155bda43469878162d99d577123c44a0" }
+
+[holdout]
+salt = "keep-locomo-holdout-v1"
+fraction = 0.3
+commitment = "sha256:fcb8fd651affba4d8d8acd1674d1ac2c362cc8a240b1994847075d50ff5f6a4d"
+
+[models.answer]
+# Same model settings as manifests/dev/longmemeval-s-copilot-dev.toml.
+provider = "copilot-cli"
+model = "gpt-5.6-luna"
+revision = "unpinned-upstream"
+tokenizer = "tiktoken-o200k-base"
+# Assumes a 128K window: the CLI does not report the model's window without
+# a model call. 128,000 minus the ~3,000 hidden harness tokens per call
+# (overhead_tokens below) leaves 125,000 for Keep's prompt and the output.
+# The longest LongMemEval-S history is about 106.6K tokens, so full context
+# fits on every question.
+context_limit = 125000
+max_output_tokens = 256
+temperature = 0.0
+prompt_version = "answer-v1"
+# Longer than the development slice: full-context prompts reach ~110K
+# tokens and 16 CLI processes run at once.
+timeout_secs = 300
+
+[models.answer.copilot]
+reasoning_effort = "low"
+# Reservation rates, set above the rates observed in probes. Real charges
+# come from the CLI's own usage report.
+credits_per_1k_input = 0.03
+credits_per_1k_output = 0.2
+overhead_tokens = 3000
+
+[models.judge]
+# A different model family from the answer model. This model rejects a
+# reasoning-effort setting, so none is passed.
+provider = "copilot-cli"
+model = "claude-haiku-4.5"
+revision = "unpinned-upstream"
+tokenizer = "tiktoken-o200k-base"
+# The same assumed 128K window minus this model's ~2,300 hidden tokens.
+context_limit = 125700
+max_output_tokens = 16
+temperature = 0.0
+prompt_version = "judge-v1"
+timeout_secs = 300
+
+[models.judge.copilot]
+credits_per_1k_input = 0.12
+credits_per_1k_output = 0.6
+overhead_tokens = 2300
+
+[models.extract]
+# Reads each session once and lists its dated facts (prompt
+# session-facts-v2). Replies are cached on disk by model, prompt version and
+# session text, so reruns and the other arms reuse them.
+provider = "copilot-cli"
+model = "gpt-5.6-luna"
+revision = "unpinned-upstream"
+tokenizer = "tiktoken-o200k-base"
+context_limit = 125000
+max_output_tokens = 3000
+temperature = 0.0
+prompt_version = "session-facts-v2"
+timeout_secs = 300
+
+[models.extract.copilot]
+reasoning_effort = "low"
+credits_per_1k_input = 0.03
+credits_per_1k_output = 0.2
+overhead_tokens = 3000
+
+[embedding]
+provider = "local-onnx"
+model = "BAAI/bge-small-en-v1.5"
+revision = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+dimensions = 384
+batch_size = 64
+
+[embedding.local]
+pooling = "cls"
+max_length = 512
+
+[embedding.local.sha256]
+"onnx/model.onnx" = "sha256:828e1496d7fabb79cfa4dcd84fa38625c0d3d21da474a00f08db0f559940cf35"
+"tokenizer.json" = "sha256:d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+"config.json" = "sha256:094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750"
+"special_tokens_map.json" = "sha256:b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3"
+"tokenizer_config.json" = "sha256:9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+
+[reranker]
+# Local cross-encoder that reorders the top fused candidates of the ranked
+# Keep arms (k2, mk2). ms-marco-MiniLM-L6-v2 scores about 440 pairs a second
+# on a 10-core laptop CPU, so reranking 50 candidates adds about 0.1 s per
+# question. Downloaded at run time into KEEP_MODEL_CACHE and checked against
+# these digests.
+provider = "local-onnx"
+model = "cross-encoder/ms-marco-MiniLM-L6-v2"
+revision = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
+max_length = 512
+top_n = 50
+
+[reranker.sha256]
+"onnx/model.onnx" = "sha256:5d3e70fd0c9ff14b9b5169a51e957b7a9c74897afd0a35ce4bd318150c1d4d4a"
+"tokenizer.json" = "sha256:d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+"config.json" = "sha256:380e02c93f431831be65d99a4e7e5f67c133985bf2e77d9d4eba46847190bacc"
+"special_tokens_map.json" = "sha256:3c3507f36dff57bce437223db3b3081d1e2b52ec3e56ee55438193ecb2c94dd6"
+"tokenizer_config.json" = "sha256:a5c2e5a7b1a29a0702cd28c08a399b5ecc110c263009d17f7e3b415f25905fd8"
+
+[extraction]
+prompt_version = "session-facts-v2"
+# The dated facts block comes first; the ranked mk2 or k2 fill takes the
+# rest of the same budget.
+facts_tokens = 1536
+# mk3's Memory preference profile, standing context ahead of the facts.
+profile_tokens = 512
+# Typical reply length (mean of 2,901 development replies: 521), for
+# the expected-cost line of the dry run.
+expected_output_tokens = 520
+# Session summaries (prompt session-summary-v1) for arms with
+# `summaries = true`: one short summary per session, written by the
+# extract model and cached beside the facts. They take at most this many
+# tokens, and at most half of what the facts block leaves, out of the same
+# budget, ahead of the ranked fill.
+summary_prompt_version = "session-summary-v1"
+summary_tokens = 512
+
+[storage]
+profile = "postgres-qdrant"
+
+[retrieval]
+chunking = "turn"
+bm25_k1 = 1.2
+bm25_b = 0.75
+standing_tokens = 4096
+evidence_tokens = 2000
+max_tool_calls = 6
+
+[budget]
+# Copilot calls are capped in AI credits; the call, token and USD caps
+# apply to OpenAI-compatible providers only. The cap is about 1.5 times the
+# dry-run worst case (see docs/benchmarks/running-g0.md).
+max_model_calls = 0
+max_input_tokens = 0
+max_output_tokens = 0
+max_cost_usd = 0.0
+max_ai_credits = 1600.0
+max_attempts = 3
+
+[dispatch]
+# Still refused unless the command also passes --allow-model-calls.
+allow_model_calls = true
+# Bounds concurrent CLI processes (answer and judge share one gate).
+concurrency = 16
+
+[[arms]]
+name = "full-context"
+kind = "full-context"
+
+[[arms]]
+name = "dense-6k"
+kind = "dense"
+budget_tokens = 6096
+top_k = 200
+
+[[arms]]
+name = "keep-k3"
+kind = "keep"
+path = "k3"
+representation = "structured"
+temporal = true
+assistant_route = true
+answer_prompt = "answer-v3"
+
+[[arms]]
+name = "keep-mk3"
+kind = "keep"
+path = "mk3"
+representation = "structured"
+temporal = true
+assistant_route = true
+preferences = true
+answer_prompt = "answer-v3"
+
+# Version 4 arms. k4 and mk4 are k3 and mk3 plus subject grounding
+# (subjects: facts about a participant the question does not ask about are
+# set apart under their own heading, and the block says who the question is
+# about) and per-session summaries (summaries), answered with answer-v4.
+# The entity expansion list (expand) is left out: it did not help on the
+# development questions (docs/benchmarks/running-g0.md). dense-6k-v4 and full-context-v4 are the unchanged baselines
+# answered with answer-v4, so the prompt's gain can be told apart from
+
+# Ablation steps from mk3 to mk4, one change each.
+[[arms]]
+name = "keep-mk3-p4"
+kind = "keep"
+path = "mk3"
+representation = "structured"
+temporal = true
+assistant_route = true
+preferences = true
+answer_prompt = "answer-v4"
+
+[[arms]]
+name = "keep-mk3-p4s"
+kind = "keep"
+path = "mk3"
+representation = "structured"
+temporal = true
+assistant_route = true
+preferences = true
+subjects = true
+answer_prompt = "answer-v4"
+
+[[arms]]
+name = "keep-mk3-p4ss"
+kind = "keep"
+path = "mk3"
+representation = "structured"
+temporal = true
+assistant_route = true
+preferences = true
+subjects = true
+summaries = true
+answer_prompt = "answer-v4"
+
+[[arms]]
+name = "keep-mk3-p4x"
+kind = "keep"
+path = "mk3"
+representation = "structured"
+temporal = true
+assistant_route = true
+preferences = true
+subjects = true
+expand = true
+answer_prompt = "answer-v4"
+
+[[arms]]
+name = "keep-mk3-p4ssx"
+kind = "keep"
+path = "mk3"
+representation = "structured"
+temporal = true
+assistant_route = true
+preferences = true
+subjects = true
+summaries = true
+expand = true
+answer_prompt = "answer-v4"
+
+[[arms]]
+name = "keep-k3-p4ssx"
+kind = "keep"
+path = "k3"
+representation = "structured"
+temporal = true
+assistant_route = true
+subjects = true
+summaries = true
+expand = true
+answer_prompt = "answer-v4"
+
+# Version 4 arms. k4 and mk4 are k3 and mk3 plus subject grounding
+# (subjects: facts about a participant the question does not ask about are
+# set apart under their own heading, and the block says who the question is
+# about) and per-session summaries (summaries), answered with answer-v4.
+# The entity expansion list (expand) is left out: it did not help on the
+# development questions (docs/benchmarks/running-g0.md). dense-6k-v4 and full-context-v4 are the unchanged baselines
+# answered with answer-v4, so the prompt's gain can be told apart from
+# the memory's.
+[[arms]]
+name = "keep-k4"
+kind = "keep"
+path = "k3"
+representation = "structured"
+temporal = true
+assistant_route = true
+subjects = true
+summaries = true
+answer_prompt = "answer-v4"
+
+[[arms]]
+name = "keep-mk4"
+kind = "keep"
+path = "mk3"
+representation = "structured"
+temporal = true
+assistant_route = true
+preferences = true
+subjects = true
+summaries = true
+answer_prompt = "answer-v4"
+
+[[arms]]
+name = "dense-6k-v4"
+kind = "dense"
+budget_tokens = 6096
+top_k = 200
+answer_prompt = "answer-v4"
+
+[[arms]]
+name = "full-context-v4"
+kind = "full-context"
+answer_prompt = "answer-v4"

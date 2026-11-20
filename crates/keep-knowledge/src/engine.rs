@@ -1,0 +1,1894 @@
+//! The Knowledge engine: ingestion, background jobs and the read tools
+//! (`search`, `fetch`, `traverse`, `cite`, `index`) on top of a [`Ledger`]
+//! and an optional vector projection.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, Mutex};
+
+use chrono::{DateTime, Utc};
+use keep_providers::{ApproxTokenizer, Embedder, HashEmbedder, Reranker, Tokenizer, timing};
+use keep_store::{Bm25Index, Bm25Params, LexicalIndex, ScoredId, VectorIndex, VectorPoint};
+use serde::{Deserialize, Serialize};
+
+use crate::budget::EvidenceAllowance;
+use crate::chunking::{DEFAULT_CHUNK_CHARS, chunk_text};
+use crate::extract::{
+    ALIAS, CheckedClaim, Claim, FactExtractor, RuleExtractor, is_single_valued, validate,
+};
+use crate::fusion::{DEFAULT_RRF_K, rrf};
+use crate::index::{IndexRequest, IndexView, normalize, render};
+use crate::ledger::{
+    AliasWrite, ApplyOutcome, ChangeSet, EntityWrite, IndexInputs, IngestBatch, IngestReport,
+    KnowledgeError, Ledger, Projection, Result, VersionWrite, normalize_name,
+};
+use crate::model::{
+    Access, Chunk, Entity, Episode, Evidence, Fact, FactStatus, FactVersion, ItemRef, Job,
+    JobCounts, JobKind, JobState, NewJob, Source, SourceKind, Time, TimeBasis, digest_hex,
+    digest_id,
+};
+use crate::resolve::{Incoming, Rival, plan};
+use crate::snapshot::{Snapshot, Snapshots};
+use crate::temporal::{AsOf, ValidMatch, chunk_visible, fact_as_of};
+
+/// A job's result: an error message and whether it may be retried.
+type JobOutcome = std::result::Result<(), (String, bool)>;
+
+/// Source of "now" for system time. Tests and replays use [`ManualClock`].
+pub trait Clock: Send + Sync {
+    fn now(&self) -> Time;
+}
+
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Time {
+        Utc::now()
+    }
+}
+
+pub struct ManualClock(Mutex<Time>);
+
+impl ManualClock {
+    pub fn new(t: Time) -> Self {
+        Self(Mutex::new(t))
+    }
+    pub fn set(&self, t: Time) {
+        *self.0.lock().expect("clock lock") = t;
+    }
+    pub fn advance(&self, d: chrono::Duration) {
+        *self.0.lock().expect("clock lock") += d;
+    }
+}
+
+impl Clock for ManualClock {
+    fn now(&self) -> Time {
+        *self.0.lock().expect("clock lock")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KnowledgeConfig {
+    /// Vector collection that holds every corpus's points.
+    pub collection: String,
+    pub chunk_chars: usize,
+    pub rrf_k: f32,
+    /// Candidates taken from each retriever before fusion.
+    pub candidate_pool: usize,
+    pub max_traverse_nodes: usize,
+    /// Where lexical candidates come from. Absent means
+    /// [`LexicalMode::Ledger`], so older configs read and write unchanged.
+    #[serde(default, skip_serializing_if = "LexicalMode::is_ledger")]
+    pub lexical: LexicalMode,
+}
+
+/// The lexical retriever behind [`Knowledge::search`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LexicalMode {
+    /// The ledger's own lexical search over readable partitions; time
+    /// filtering happens after the candidate pools are cut.
+    #[default]
+    Ledger,
+    /// In-process BM25 over exactly the items the reader can see at the
+    /// requested time. Both retrievers drop invisible items before their
+    /// pools are cut, and an optional reranker reorders the fused head.
+    Bm25(Bm25Params),
+}
+
+impl LexicalMode {
+    pub fn is_ledger(&self) -> bool {
+        matches!(self, LexicalMode::Ledger)
+    }
+}
+
+impl Default for KnowledgeConfig {
+    fn default() -> Self {
+        Self {
+            collection: "knowledge".into(),
+            chunk_chars: DEFAULT_CHUNK_CHARS,
+            rrf_k: DEFAULT_RRF_K,
+            candidate_pool: 50,
+            max_traverse_nodes: 100,
+            lexical: LexicalMode::Ledger,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SourceInput {
+    pub id: String,
+    /// Visibility label inherited by everything derived from the source.
+    pub partition: String,
+    pub collection: String,
+    pub title: String,
+    pub kind: SourceKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EpisodeInput {
+    pub id: String,
+    pub speaker: String,
+    pub occurred_at: Option<Time>,
+    pub text: String,
+}
+
+/// A pointer to an exact span of an episode.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Citation {
+    /// Stable reference, `keep:<evidence or chunk id>`.
+    pub reference: String,
+    pub source_id: String,
+    pub source_title: String,
+    pub episode_id: String,
+    pub speaker: String,
+    pub occurred_at: Option<Time>,
+    pub char_start: i32,
+    pub char_end: i32,
+    pub quote: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FactSummary {
+    pub status: FactStatus,
+    pub valid_from: Option<Time>,
+    pub valid_to: Option<Time>,
+    pub valid_from_basis: TimeBasis,
+    pub valid_match: Option<ValidMatch>,
+    pub version: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Hit {
+    pub item: ItemRef,
+    pub rank: usize,
+    pub score: f32,
+    pub text: String,
+    pub tokens: usize,
+    pub source_id: String,
+    pub occurred_at: Option<Time>,
+    pub fact: Option<FactSummary>,
+    pub citation: Citation,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SearchRequest {
+    pub corpus: String,
+    pub access: Access,
+    pub query: String,
+    pub as_of: AsOf,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub hits: Vec<Hit>,
+    pub used_tokens: usize,
+    /// Results that matched but did not fit the evidence allowance.
+    pub omitted: usize,
+    /// Why results may be weaker than usual, e.g. `vector_unavailable`.
+    pub degraded: Vec<String>,
+    pub method: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Fetched {
+    Chunk {
+        chunk: Chunk,
+        citation: Citation,
+    },
+    Fact {
+        fact: Fact,
+        summary: FactSummary,
+        citations: Vec<Citation>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FetchResult {
+    pub item: Fetched,
+    pub text: String,
+    pub tokens: usize,
+    /// Some evidence was left out to stay within the allowance.
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Edge {
+    pub fact_id: String,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub object_entity: Option<String>,
+    pub summary: FactSummary,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Neighbourhood {
+    pub nodes: Vec<Entity>,
+    pub edges: Vec<Edge>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobRun {
+    pub succeeded: usize,
+    pub retried: usize,
+    pub failed: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForgetReport {
+    pub episodes: i64,
+    pub chunks: i64,
+    pub facts_deleted: i64,
+    pub facts_kept: i64,
+    pub vectors_deleted: usize,
+    /// Vector deletion failed and was queued for retry.
+    pub vectors_deferred: usize,
+}
+
+pub struct Knowledge {
+    ledger: Arc<dyn Ledger>,
+    vectors: Option<(Arc<dyn VectorIndex>, String)>,
+    embedder: Arc<dyn Embedder>,
+    extractor: Arc<dyn FactExtractor>,
+    tokenizer: Arc<dyn Tokenizer>,
+    clock: Arc<dyn Clock>,
+    config: KnowledgeConfig,
+    collection_ready: tokio::sync::OnceCell<()>,
+    /// A cross-encoder and how many fused candidates it reorders.
+    reranker: Option<(Arc<dyn Reranker>, usize)>,
+    snapshots: Arc<Snapshots>,
+}
+
+/// Vector namespace for one partition of one corpus. Opaque so labels never
+/// reach the index backend.
+/// A claim extracted outside the per-episode job queue (for example by a
+/// model reading a whole session), with the turns that state it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternalClaim {
+    pub claim: Claim,
+    /// Fact text to show and index; defaults to "subject predicate object".
+    pub text: Option<String>,
+    /// Whether a new value for the same (subject, predicate) replaces the
+    /// current one.
+    pub single_valued: bool,
+    /// Episodes (whole turns) cited as evidence, the anchor first.
+    pub episodes: Vec<String>,
+}
+
+/// One evidence span to record for a planned claim.
+struct Span {
+    episode_id: String,
+    source_id: String,
+    start: i32,
+    end: i32,
+    quote: String,
+}
+
+/// A claim ready to plan.
+struct Planned<'a> {
+    claim: &'a Claim,
+    spans: Vec<Span>,
+    single_valued: bool,
+    text: Option<String>,
+    extractor: &'a str,
+}
+
+pub fn namespace(corpus: &str, partition: &str) -> String {
+    digest_hex(&["ns", corpus, partition])[..32].to_string()
+}
+
+fn render_date(t: Option<Time>) -> String {
+    t.map_or_else(|| "undated".into(), |t| t.date_naive().to_string())
+}
+
+fn summary_of(v: &FactVersion, m: Option<ValidMatch>) -> FactSummary {
+    FactSummary {
+        status: v.status,
+        valid_from: v.valid_from,
+        valid_to: v.valid_to,
+        valid_from_basis: v.valid_from_basis,
+        valid_match: m,
+        version: v.version,
+    }
+}
+
+fn render_fact(text: &str, s: &FactSummary) -> String {
+    let from = match s.valid_from_basis {
+        TimeBasis::Unknown => "unknown".to_string(),
+        _ => render_date(s.valid_from),
+    };
+    let window = match s.valid_to {
+        Some(to) => format!("{from} to {}", render_date(Some(to))),
+        None => format!("since {from}"),
+    };
+    format!("Fact: {text} ({window}; {})", s.status.as_str())
+}
+
+pub(crate) fn render_chunk(c: &Chunk) -> String {
+    format!("[{}] {}: {}", render_date(c.occurred_at), c.speaker, c.text)
+}
+
+/// The text a reranker judges: exactly what a hit would show.
+fn rerank_text(snap: &Snapshot, i: u32, as_of: AsOf) -> String {
+    match snap.chunks.get(i as usize) {
+        Some(c) => render_chunk(c),
+        None => {
+            let f = &snap.facts[i as usize - snap.chunks.len()];
+            match fact_as_of(f, as_of) {
+                Some(view) => render_fact(&f.text, &summary_of(&view.version, view.valid)),
+                None => f.text.clone(),
+            }
+        }
+    }
+}
+
+fn charge(out: &mut SearchResult, allowance: &mut EvidenceAllowance, hit: Hit) {
+    if allowance.try_charge(hit.tokens) {
+        out.used_tokens += hit.tokens;
+        out.hits.push(Hit {
+            rank: out.hits.len() + 1,
+            ..hit
+        });
+    } else {
+        out.omitted += 1;
+    }
+}
+
+impl Knowledge {
+    /// Engine with the offline defaults: rule extractor, 256-d hash
+    /// embedder, approximate tokenizer and the system clock.
+    pub fn new(ledger: Arc<dyn Ledger>, vectors: Option<(Arc<dyn VectorIndex>, String)>) -> Self {
+        Self {
+            ledger,
+            vectors,
+            embedder: Arc::new(HashEmbedder::new(256)),
+            extractor: Arc::new(RuleExtractor),
+            tokenizer: Arc::new(ApproxTokenizer),
+            clock: Arc::new(SystemClock),
+            config: KnowledgeConfig::default(),
+            collection_ready: tokio::sync::OnceCell::new(),
+            reranker: None,
+            snapshots: Arc::default(),
+        }
+    }
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+    pub fn with_embedder(mut self, embedder: Arc<dyn Embedder>) -> Self {
+        self.embedder = embedder;
+        self
+    }
+    pub fn with_extractor(mut self, extractor: Arc<dyn FactExtractor>) -> Self {
+        self.extractor = extractor;
+        self
+    }
+    pub fn with_tokenizer(mut self, tokenizer: Arc<dyn Tokenizer>) -> Self {
+        self.tokenizer = tokenizer;
+        self
+    }
+    pub fn with_config(mut self, config: KnowledgeConfig) -> Self {
+        self.config = config;
+        self
+    }
+    /// Reorder the first `top_n` fused candidates by `reranker`'s score.
+    /// Only [`LexicalMode::Bm25`] search uses it.
+    pub fn with_reranker(mut self, reranker: Arc<dyn Reranker>, top_n: usize) -> Self {
+        self.reranker = Some((reranker, top_n));
+        self
+    }
+
+    /// Another engine over the same ledger, vectors, embedder, extractor,
+    /// tokenizer and config, with its own clock, so independent corpora can
+    /// be ingested concurrently.
+    pub fn sharing_storage(&self, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            ledger: self.ledger.clone(),
+            vectors: self.vectors.clone(),
+            embedder: self.embedder.clone(),
+            extractor: self.extractor.clone(),
+            tokenizer: self.tokenizer.clone(),
+            clock,
+            config: self.config.clone(),
+            collection_ready: tokio::sync::OnceCell::new(),
+            reranker: self.reranker.clone(),
+            snapshots: self.snapshots.clone(),
+        }
+    }
+
+    pub fn ledger(&self) -> &Arc<dyn Ledger> {
+        &self.ledger
+    }
+    pub fn vectors(&self) -> Option<&Arc<dyn VectorIndex>> {
+        self.vectors.as_ref().map(|v| &v.0)
+    }
+    pub fn config(&self) -> &KnowledgeConfig {
+        &self.config
+    }
+    pub fn now(&self) -> Time {
+        self.clock.now()
+    }
+
+    /// Short description of the retrieval stack, for run artifacts.
+    pub fn method(&self) -> String {
+        let vec = match &self.vectors {
+            Some((_, backend)) => format!("{backend}:{}", self.embedder.descriptor().model),
+            None => "none".into(),
+        };
+        match self.config.lexical {
+            LexicalMode::Ledger => format!(
+                "hybrid(lexical={}, vector={vec}, fusion=rrf(k={}))",
+                self.ledger.lexical_method(),
+                self.config.rrf_k
+            ),
+            LexicalMode::Bm25(params) => {
+                let lexical = Bm25Index::build(params, []).method();
+                let rerank = match &self.reranker {
+                    Some((r, n)) => {
+                        let d = r.descriptor();
+                        format!(
+                            ", rerank={}:{}@{}(top={n})",
+                            d.provider, d.model, d.revision
+                        )
+                    }
+                    None => String::new(),
+                };
+                format!(
+                    "hybrid(lexical={lexical};visible-first, vector={vec};visible-first, fusion=rrf(k={}), pool={}{rerank})",
+                    self.config.rrf_k, self.config.candidate_pool
+                )
+            }
+        }
+    }
+
+    // ----- ingestion -------------------------------------------------------
+
+    /// Add a source's episodes. Re-sending the same episodes is a no-op.
+    pub async fn ingest(
+        &self,
+        corpus: &str,
+        source: SourceInput,
+        episodes: Vec<EpisodeInput>,
+    ) -> Result<IngestReport> {
+        for (what, v) in [
+            ("corpus", corpus),
+            ("source id", &source.id),
+            ("partition", &source.partition),
+        ] {
+            if v.trim().is_empty() {
+                return Err(KnowledgeError::Invalid(format!("{what} is empty")));
+            }
+        }
+        let now = self.clock.now();
+        let chunking = timing::span("knowledge.chunk").items(episodes.len());
+        let mut eps = Vec::new();
+        let mut chunks = Vec::new();
+        let mut seen = BTreeSet::new();
+        for (i, e) in episodes.into_iter().enumerate() {
+            if e.id.trim().is_empty() || !seen.insert(e.id.clone()) {
+                return Err(KnowledgeError::Invalid(
+                    "episode ids must be non-empty and unique".into(),
+                ));
+            }
+            let when = e.occurred_at.map(|t| t.to_rfc3339()).unwrap_or_default();
+            let hash = digest_hex(&[&e.speaker, &when, &e.text]);
+            for (j, span) in chunk_text(&e.text, self.config.chunk_chars)
+                .into_iter()
+                .enumerate()
+            {
+                chunks.push(Chunk {
+                    corpus: corpus.into(),
+                    id: digest_id("chunk", &[corpus, &e.id, &j.to_string()]),
+                    episode_id: e.id.clone(),
+                    source_id: source.id.clone(),
+                    partition: source.partition.clone(),
+                    ordinal: j as i32,
+                    char_start: span.start as i32,
+                    char_end: span.end as i32,
+                    speaker: e.speaker.clone(),
+                    text: span.text,
+                    occurred_at: e.occurred_at,
+                    recorded_at: now,
+                });
+            }
+            eps.push(Episode {
+                corpus: corpus.into(),
+                id: e.id,
+                source_id: source.id.clone(),
+                partition: source.partition.clone(),
+                ordinal: i as i32,
+                speaker: e.speaker,
+                occurred_at: e.occurred_at,
+                recorded_at: now,
+                text: e.text,
+                content_hash: hash,
+            });
+        }
+        drop(chunking);
+        let _t = timing::span("knowledge.ledger_ingest").items(chunks.len());
+        self.ledger
+            .ingest(IngestBatch {
+                source: Source {
+                    corpus: corpus.into(),
+                    id: source.id,
+                    partition: source.partition,
+                    collection: source.collection,
+                    title: source.title,
+                    kind: source.kind,
+                    created_at: now,
+                },
+                episodes: eps,
+                chunks,
+                now,
+            })
+            .await
+    }
+
+    /// Run due jobs until none are left (or `max_rounds` batches ran).
+    pub async fn run_jobs(&self, corpus: &str, max_rounds: usize) -> Result<JobRun> {
+        let mut run = JobRun::default();
+        for _ in 0..max_rounds {
+            let t = timing::span("knowledge.jobs_claim");
+            let jobs = self.ledger.claim_jobs(corpus, self.clock.now(), 64).await?;
+            drop(t.items(jobs.len()));
+            if jobs.is_empty() {
+                break;
+            }
+            let (project, other): (Vec<Job>, Vec<Job>) =
+                jobs.into_iter().partition(|j| j.kind == JobKind::Project);
+            let mut outcomes: Vec<(Job, JobOutcome)> = Vec::new();
+            for job in other {
+                let _t = timing::span(match job.kind {
+                    JobKind::Extract => "knowledge.extract_episode",
+                    _ => "knowledge.unproject",
+                })
+                .items(1);
+                let r = match job.kind {
+                    JobKind::Extract => self.extract_episode(corpus, &job.target).await,
+                    _ => self.unproject(&job.target).await,
+                };
+                outcomes.push((job, r.map_err(|e| (e.to_string(), retryable(&e)))));
+            }
+            match self.project(corpus, &project).await {
+                Ok(()) => outcomes.extend(project.into_iter().map(|j| (j, Ok(())))),
+                Err(e) => {
+                    let msg = (e.to_string(), retryable(&e));
+                    outcomes.extend(project.into_iter().map(|j| (j, Err(msg.clone()))));
+                }
+            }
+            let _t = timing::span("knowledge.jobs_finish").items(outcomes.len());
+            let mut done = Vec::new();
+            for (job, r) in outcomes {
+                match r {
+                    Ok(()) => done.push(job),
+                    Err((msg, retry)) => {
+                        let now = self.clock.now();
+                        match self.ledger.fail_job(&job, &msg, retry, now).await? {
+                            JobState::RetryScheduled => run.retried += 1,
+                            _ => run.failed += 1,
+                        }
+                    }
+                }
+            }
+            let completed = self.ledger.complete_jobs(&done, self.clock.now()).await?;
+            run.succeeded += completed.into_iter().filter(|&ok| ok).count();
+        }
+        Ok(run)
+    }
+
+    /// Background jobs of one partition by state. See [`Ledger::job_counts`].
+    pub async fn job_counts(&self, corpus: &str, partition: &str) -> Result<JobCounts> {
+        self.ledger
+            .job_counts(corpus, partition, &namespace(corpus, partition))
+            .await
+    }
+
+    /// Check the ledger answers. For a readiness probe.
+    pub async fn probe_ledger(&self) -> Result<()> {
+        self.ledger
+            .due_corpora(self.clock.now(), 1)
+            .await
+            .map(|_| ())
+    }
+
+    /// Check the vector store answers and holds the collection with the
+    /// embedder's dimensions. `None` without a vector store.
+    pub async fn probe_vectors(&self) -> Option<Result<()>> {
+        let (index, _) = self.vectors.as_ref()?;
+        Some(
+            index
+                .ensure_collection(&self.config.collection, self.embedder.dimensions())
+                .await
+                .map_err(KnowledgeError::from),
+        )
+    }
+
+    /// Run due jobs of every corpus that has some, up to `max_corpora`
+    /// corpora and `max_rounds` batches each. For a background worker, so
+    /// retries and deferred vector deletions finish without a new request.
+    pub async fn run_due_jobs(&self, max_corpora: usize, max_rounds: usize) -> Result<JobRun> {
+        let mut total = JobRun::default();
+        for corpus in self
+            .ledger
+            .due_corpora(self.clock.now(), max_corpora)
+            .await?
+        {
+            let run = self.run_jobs(&corpus, max_rounds).await?;
+            total.succeeded += run.succeeded;
+            total.retried += run.retried;
+            total.failed += run.failed;
+        }
+        Ok(total)
+    }
+
+    async fn ensure_collection(&self) -> Result<()> {
+        let Some((index, _)) = &self.vectors else {
+            return Ok(());
+        };
+        self.collection_ready
+            .get_or_try_init(|| async {
+                index
+                    .ensure_collection(&self.config.collection, self.embedder.dimensions())
+                    .await
+                    .map_err(KnowledgeError::from)
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn project(&self, corpus: &str, jobs: &[Job]) -> Result<()> {
+        let Some((index, _)) = &self.vectors else {
+            return Ok(());
+        };
+        let t = timing::span("knowledge.projection_read").items(jobs.len());
+        let targets: Vec<String> = jobs.iter().map(|j| j.target.clone()).collect();
+        let items: Vec<(String, Projection)> = targets
+            .iter()
+            .cloned()
+            .zip(self.ledger.projections(corpus, &targets).await?)
+            .filter_map(|(id, p)| p.map(|p| (id, p)))
+            .collect();
+        drop(t);
+        if items.is_empty() {
+            return Ok(());
+        }
+        self.ensure_collection().await?;
+        let texts: Vec<String> = items.iter().map(|(_, p)| p.text.clone()).collect();
+        let t = timing::span("knowledge.embed").items(texts.len());
+        let vectors = self.embedder.embed(&texts).await?.vectors;
+        drop(t);
+        let mut by_ns: BTreeMap<String, Vec<VectorPoint>> = BTreeMap::new();
+        for ((id, p), vector) in items.iter().zip(vectors) {
+            by_ns
+                .entry(namespace(corpus, &p.partition))
+                .or_default()
+                .push(VectorPoint {
+                    id: id.clone(),
+                    vector,
+                });
+        }
+        for (ns, points) in &by_ns {
+            let _t = timing::span("knowledge.vector_upsert").items(points.len());
+            index.upsert(&self.config.collection, ns, points).await?;
+        }
+        // A purge may have run while we embedded; never leave its vectors.
+        let _t = timing::span("knowledge.projection_recheck").items(items.len());
+        let ids: Vec<String> = items.iter().map(|(id, _)| id.clone()).collect();
+        let still = self.ledger.projections(corpus, &ids).await?;
+        for ((id, p), now) in items.iter().zip(still) {
+            if now.is_none() {
+                index
+                    .delete_points(
+                        &self.config.collection,
+                        &namespace(corpus, &p.partition),
+                        std::slice::from_ref(id),
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn unproject(&self, target: &str) -> Result<()> {
+        let Some((index, _)) = &self.vectors else {
+            return Ok(());
+        };
+        let (ns, id) = target
+            .split_once('\u{1f}')
+            .ok_or_else(|| KnowledgeError::Invalid("malformed unproject target".into()))?;
+        index
+            .delete_points(&self.config.collection, ns, &[id.to_string()])
+            .await?;
+        Ok(())
+    }
+
+    async fn extract_episode(&self, corpus: &str, episode_id: &str) -> Result<()> {
+        let Some(ep) = self.ledger.episode(corpus, episode_id).await? else {
+            return Ok(());
+        };
+        let t = timing::span("knowledge.extract_rules").items(1);
+        let claims = validate(&ep, self.extractor.extract(&ep).await?);
+        drop(t);
+        if claims.is_empty() {
+            return Ok(());
+        }
+        for _ in 0..3 {
+            let t = timing::span("knowledge.plan_changes").items(claims.len());
+            let change = self.plan_changes(&ep, &claims).await?;
+            drop(t);
+            if change.is_empty() {
+                return Ok(());
+            }
+            let _t = timing::span("knowledge.ledger_apply").items(change.new_facts.len());
+            match self.ledger.apply(change).await? {
+                ApplyOutcome::Applied | ApplyOutcome::EpisodeGone => return Ok(()),
+                ApplyOutcome::Conflict => continue,
+            }
+        }
+        Err(KnowledgeError::Conflict(
+            "facts kept changing while extracting".into(),
+        ))
+    }
+
+    async fn plan_changes(&self, ep: &Episode, claims: &[CheckedClaim]) -> Result<ChangeSet> {
+        let planned: Vec<Planned> = claims
+            .iter()
+            .map(|c| Planned {
+                claim: &c.claim,
+                spans: vec![Span {
+                    episode_id: ep.id.clone(),
+                    source_id: ep.source_id.clone(),
+                    start: c.start as i32,
+                    end: c.end as i32,
+                    quote: c.claim.quote.clone(),
+                }],
+                single_valued: is_single_valued(&c.claim.predicate),
+                text: None,
+                extractor: self.extractor.id(),
+            })
+            .collect();
+        self.plan_planned(ep, &planned).await
+    }
+
+    /// Apply claims extracted outside the per-episode job queue, such as a
+    /// model reading a whole session. Each claim cites whole turns by
+    /// episode id; claims are planned against the episode they cite first,
+    /// in the given order, so a later claim can supersede an earlier one.
+    /// `single_valued` replaces the fixed predicate list: a new value for
+    /// the same (subject, predicate) closes the old one's window. Returns
+    /// the number of claims applied; claims citing no known episode are
+    /// skipped.
+    pub async fn apply_claims(
+        &self,
+        corpus: &str,
+        extractor: &str,
+        claims: &[ExternalClaim],
+    ) -> Result<usize> {
+        let mut episodes: HashMap<String, Option<Episode>> = HashMap::new();
+        for c in claims {
+            for id in &c.episodes {
+                if !episodes.contains_key(id) {
+                    let ep = self.ledger.episode(corpus, id).await?;
+                    episodes.insert(id.clone(), ep);
+                }
+            }
+        }
+        // Group by anchor episode, keeping first-seen order.
+        let mut groups: Vec<(Episode, Vec<Planned>)> = Vec::new();
+        for c in claims {
+            let found: Vec<&Episode> = c
+                .episodes
+                .iter()
+                .filter_map(|id| episodes[id].as_ref())
+                .collect();
+            let Some(anchor) = found.first() else {
+                continue;
+            };
+            let spans = found
+                .iter()
+                .map(|ep| Span {
+                    episode_id: ep.id.clone(),
+                    source_id: ep.source_id.clone(),
+                    start: 0,
+                    end: ep.text.chars().count() as i32,
+                    quote: ep.text.clone(),
+                })
+                .collect();
+            let planned = Planned {
+                claim: &c.claim,
+                spans,
+                single_valued: c.single_valued,
+                text: c.text.clone(),
+                extractor,
+            };
+            match groups.iter_mut().find(|(ep, _)| ep.id == anchor.id) {
+                Some((_, g)) => g.push(planned),
+                None => groups.push(((*anchor).clone(), vec![planned])),
+            }
+        }
+        let mut applied = 0;
+        for (ep, planned) in &groups {
+            let mut done = false;
+            for _ in 0..3 {
+                let change = self.plan_planned(ep, planned).await?;
+                if change.is_empty() {
+                    done = true;
+                    break;
+                }
+                match self.ledger.apply(change).await? {
+                    ApplyOutcome::Applied | ApplyOutcome::EpisodeGone => {
+                        done = true;
+                        break;
+                    }
+                    ApplyOutcome::Conflict => continue,
+                }
+            }
+            if !done {
+                return Err(KnowledgeError::Conflict(
+                    "facts kept changing while applying claims".into(),
+                ));
+            }
+            applied += planned.len();
+        }
+        Ok(applied)
+    }
+
+    async fn plan_planned(&self, ep: &Episode, claims: &[Planned<'_>]) -> Result<ChangeSet> {
+        let corpus = ep.corpus.as_str();
+        let part = ep.partition.as_str();
+        let now = self.clock.now();
+        let mut cs = ChangeSet {
+            corpus: corpus.into(),
+            partition: part.into(),
+            episode_id: ep.id.clone(),
+            now,
+            entities: vec![],
+            aliases: vec![],
+            new_facts: vec![],
+            evidence: vec![],
+            versions: vec![],
+            jobs: vec![],
+        };
+        // normalised name -> (entity id, display name)
+        let mut names: HashMap<String, (String, String)> = HashMap::new();
+        // Facts touched in this change set, by id, with their latest version.
+        let mut touched: HashMap<String, Fact> = HashMap::new();
+
+        for c in claims {
+            let claim = c.claim;
+            let (subject, subject_name) = self
+                .resolve_entity(
+                    &mut cs,
+                    &mut names,
+                    part,
+                    &claim.subject,
+                    &claim.subject_kind,
+                )
+                .await?;
+            if claim.predicate == ALIAS {
+                if normalize_name(&claim.object) != normalize_name(&subject_name) {
+                    cs.aliases.push(AliasWrite {
+                        entity_id: subject.clone(),
+                        alias: claim.object.clone(),
+                        source_id: ep.source_id.clone(),
+                    });
+                    names.insert(
+                        normalize_name(&claim.object),
+                        (subject.clone(), subject_name.clone()),
+                    );
+                }
+                continue;
+            }
+            let (object_entity, object_name) = match &claim.object_kind {
+                Some(kind) => {
+                    let (id, name) = self
+                        .resolve_entity(&mut cs, &mut names, part, &claim.object, kind)
+                        .await?;
+                    (Some(id), name)
+                }
+                None => (None, claim.object.clone()),
+            };
+            let object_key = object_entity
+                .clone()
+                .unwrap_or_else(|| normalize_name(&object_name));
+            let text = c.text.clone().unwrap_or_else(|| {
+                format!(
+                    "{subject_name} {} {object_name}",
+                    claim.predicate.replace('_', " ")
+                )
+            });
+
+            // The same statement may hold for several separate windows
+            // (moved away, moved back); each window is its own fact.
+            let mut chosen: Option<(String, Option<Fact>)> = None;
+            for n in 0..8 {
+                let key = if n == 0 {
+                    object_key.clone()
+                } else {
+                    format!("{object_key}#{n}")
+                };
+                let id = Fact::id_for(corpus, part, &subject, &claim.predicate, &key);
+                let existing = match touched.get(&id) {
+                    Some(f) => Some(f.clone()),
+                    None => self
+                        .ledger
+                        .facts(corpus, std::slice::from_ref(&id))
+                        .await?
+                        .pop(),
+                };
+                match existing {
+                    None => {
+                        chosen = Some((id, None));
+                        break;
+                    }
+                    Some(f) => {
+                        let closed_before = f.current().is_some_and(|v| {
+                            v.status == FactStatus::Superseded
+                                && v.valid_to
+                                    .zip(claim.valid_from)
+                                    .is_some_and(|(to, from)| to <= from)
+                        });
+                        if !closed_before {
+                            chosen = Some((id, Some(f)));
+                            break;
+                        }
+                    }
+                }
+            }
+            let Some((fact_id, existing)) = chosen else {
+                continue;
+            };
+            let mut evidence: Vec<Evidence> = Vec::with_capacity(c.spans.len());
+            for sp in &c.spans {
+                let id = Evidence::id_for(corpus, &fact_id, &sp.episode_id, sp.start, sp.end);
+                if evidence.iter().any(|e| e.id == id) {
+                    continue;
+                }
+                evidence.push(Evidence {
+                    corpus: corpus.into(),
+                    id,
+                    fact_id: fact_id.clone(),
+                    episode_id: sp.episode_id.clone(),
+                    source_id: sp.source_id.clone(),
+                    partition: part.into(),
+                    char_start: sp.start,
+                    char_end: sp.end,
+                    quote: sp.quote.clone(),
+                    extractor: c.extractor.into(),
+                    recorded_at: now,
+                });
+            }
+            if let Some(f) = existing {
+                for evidence in evidence {
+                    if f.evidence.iter().any(|e| e.id == evidence.id) {
+                        continue;
+                    }
+                    if let Some(nf) = cs.new_facts.iter_mut().find(|x| x.id == fact_id) {
+                        nf.evidence.push(evidence);
+                    } else if !cs.evidence.iter().any(|e| e.id == evidence.id) {
+                        cs.evidence.push(evidence);
+                    }
+                }
+                continue;
+            }
+
+            let mut rivals = Vec::new();
+            if c.single_valued {
+                let mut current: BTreeMap<String, Fact> = self
+                    .ledger
+                    .current_facts(corpus, part, &subject, &claim.predicate)
+                    .await?
+                    .into_iter()
+                    .map(|f| (f.id.clone(), f))
+                    .collect();
+                for f in touched.values() {
+                    if f.subject == subject && f.predicate == claim.predicate {
+                        current.insert(f.id.clone(), f.clone());
+                    }
+                }
+                for f in current.values() {
+                    if let Some(v) = f.current() {
+                        rivals.push(Rival {
+                            fact_id: f.id.clone(),
+                            current: v.clone(),
+                        });
+                    }
+                }
+            }
+            let p = plan(
+                &Incoming {
+                    fact_id: fact_id.clone(),
+                    valid_from: claim.valid_from,
+                    basis: claim.basis,
+                },
+                &rivals,
+                now,
+            );
+            let fact = Fact {
+                corpus: corpus.into(),
+                id: fact_id.clone(),
+                partition: part.into(),
+                subject: subject.clone(),
+                predicate: claim.predicate.clone(),
+                object: object_name,
+                object_entity,
+                text,
+                versions: vec![p.incoming],
+                evidence,
+            };
+            for (rid, expected, v) in p.rival_versions {
+                if let Some(nf) = cs.new_facts.iter_mut().find(|x| x.id == rid) {
+                    // Created in this same change set: rewrite in place, the
+                    // intermediate state was never committed.
+                    let first = &mut nf.versions[0];
+                    first.valid_to = v.valid_to;
+                    first.status = v.status;
+                    first.cause = v.cause.clone();
+                    touched.insert(rid.clone(), nf.clone());
+                } else if let Some(w) = cs.versions.iter_mut().find(|w| w.fact_id == rid) {
+                    w.version = FactVersion {
+                        version: w.version.version,
+                        ..v
+                    };
+                    if let Some(t) = touched.get_mut(&rid) {
+                        *t.versions.last_mut().expect("version") = w.version.clone();
+                    }
+                } else {
+                    let mut f = match touched.get(&rid) {
+                        Some(f) => f.clone(),
+                        None => self
+                            .ledger
+                            .facts(corpus, std::slice::from_ref(&rid))
+                            .await?
+                            .pop()
+                            .ok_or_else(|| KnowledgeError::Conflict("rival vanished".into()))?,
+                    };
+                    if let Some(cur) = f.versions.last_mut() {
+                        cur.invalidated_at = Some(now);
+                    }
+                    f.versions.push(v.clone());
+                    touched.insert(rid.clone(), f);
+                    cs.versions.push(VersionWrite {
+                        fact_id: rid,
+                        expected_current: expected,
+                        version: v,
+                    });
+                }
+            }
+            cs.jobs.push(NewJob {
+                kind: JobKind::Project,
+                target: fact_id.clone(),
+            });
+            touched.insert(fact_id, fact.clone());
+            cs.new_facts.push(fact);
+        }
+        Ok(cs)
+    }
+
+    async fn resolve_entity(
+        &self,
+        cs: &mut ChangeSet,
+        names: &mut HashMap<String, (String, String)>,
+        partition: &str,
+        name: &str,
+        kind: &str,
+    ) -> Result<(String, String)> {
+        let norm = normalize_name(name);
+        if let Some(hit) = names.get(&norm) {
+            return Ok(hit.clone());
+        }
+        let found = match self
+            .ledger
+            .find_entity(&cs.corpus, partition, &norm)
+            .await?
+        {
+            Some(e) => (e.id, e.name),
+            None => {
+                let id = digest_id("ent", &[&cs.corpus, partition, &norm]);
+                cs.entities.push(EntityWrite {
+                    id: id.clone(),
+                    name: name.trim().to_string(),
+                    kind: kind.into(),
+                });
+                (id, name.trim().to_string())
+            }
+        };
+        names.insert(norm, found.clone());
+        Ok(found)
+    }
+
+    // ----- reads -----------------------------------------------------------
+
+    /// Partitions in the corpus the caller may read. Access fails closed.
+    async fn readable(&self, corpus: &str, access: &Access) -> Result<Vec<String>> {
+        Ok(self
+            .ledger
+            .partitions(corpus)
+            .await?
+            .into_iter()
+            .map(|(p, _)| p)
+            .filter(|p| access.allows(p))
+            .collect())
+    }
+
+    async fn citation_for_chunk(&self, c: &Chunk) -> Result<Citation> {
+        let title = self.source_title(&c.corpus, &c.source_id).await?;
+        Ok(chunk_citation(c, title))
+    }
+
+    async fn source_title(&self, corpus: &str, source_id: &str) -> Result<String> {
+        Ok(self
+            .ledger
+            .source(corpus, source_id)
+            .await?
+            .map(|s| s.title)
+            .unwrap_or_default())
+    }
+
+    async fn citation_for_evidence(&self, e: &Evidence) -> Result<Option<Citation>> {
+        let Some(ep) = self.ledger.episode(&e.corpus, &e.episode_id).await? else {
+            return Ok(None);
+        };
+        let title = self
+            .ledger
+            .source(&e.corpus, &e.source_id)
+            .await?
+            .map(|s| s.title)
+            .unwrap_or_default();
+        Ok(Some(Citation {
+            reference: format!("keep:{}", e.id),
+            source_id: e.source_id.clone(),
+            source_title: title,
+            episode_id: e.episode_id.clone(),
+            speaker: ep.speaker,
+            occurred_at: ep.occurred_at,
+            char_start: e.char_start,
+            char_end: e.char_end,
+            quote: e.quote.clone(),
+        }))
+    }
+
+    /// Hybrid search. Permission filtering happens before ranking: each
+    /// retriever only ever sees readable partitions, and every candidate is
+    /// re-checked against the ledger before it is shown.
+    pub async fn search(
+        &self,
+        req: &SearchRequest,
+        allowance: &mut EvidenceAllowance,
+    ) -> Result<SearchResult> {
+        let _t = timing::span("knowledge.search").items(1);
+        let mut out = SearchResult {
+            method: self.method(),
+            ..Default::default()
+        };
+        let parts = self.readable(&req.corpus, &req.access).await?;
+        if parts.is_empty() || req.query.trim().is_empty() {
+            return Ok(out);
+        }
+        let limit = if req.limit == 0 { 10 } else { req.limit };
+        let pool = self.config.candidate_pool.max(limit * 4);
+        if let LexicalMode::Bm25(params) = self.config.lexical {
+            return self
+                .search_visible(req, allowance, params, &parts, limit, pool, out)
+                .await;
+        }
+
+        let lexical: Vec<String> = self
+            .ledger
+            .lexical(&req.corpus, &parts, &req.query, pool)
+            .await?
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        let vector = match self
+            .vector_candidates(&req.corpus, &parts, &req.query, pool)
+            .await
+        {
+            Ok(v) => v,
+            Err(_) => {
+                out.degraded.push("vector_unavailable".into());
+                Vec::new()
+            }
+        };
+        if self.vectors.is_none() {
+            out.degraded.push("vector_disabled".into());
+        }
+        let fused = rrf(&[lexical, vector], self.config.rrf_k);
+        let fused: Vec<(ItemRef, f32)> = fused
+            .into_iter()
+            .take(pool * 2)
+            .filter_map(|(id, s)| ItemRef::from_point_id(&id).map(|r| (r, s)))
+            .collect();
+
+        let chunk_ids: Vec<String> = fused
+            .iter()
+            .filter_map(|(r, _)| match r {
+                ItemRef::Chunk(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        let fact_ids: Vec<String> = fused
+            .iter()
+            .filter_map(|(r, _)| match r {
+                ItemRef::Fact(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        let chunks: HashMap<String, Chunk> = self
+            .ledger
+            .chunks(&req.corpus, &chunk_ids)
+            .await?
+            .into_iter()
+            .map(|c| (c.id.clone(), c))
+            .collect();
+        let facts: HashMap<String, Fact> = self
+            .ledger
+            .facts(&req.corpus, &fact_ids)
+            .await?
+            .into_iter()
+            .map(|f| (f.id.clone(), f))
+            .collect();
+
+        for (item, score) in fused {
+            if out.hits.len() >= limit {
+                break;
+            }
+            let hit = match &item {
+                ItemRef::Chunk(id) => {
+                    let Some(c) = chunks.get(id) else { continue };
+                    if !req.access.allows(&c.partition) || !chunk_visible(c, req.as_of) {
+                        continue;
+                    }
+                    self.chunk_hit(&item, score, c).await?
+                }
+                ItemRef::Fact(id) => {
+                    let Some(f) = facts.get(id) else { continue };
+                    if !req.access.allows(&f.partition) {
+                        continue;
+                    }
+                    let Some(hit) = self.fact_hit(&item, score, f, req.as_of).await? else {
+                        continue;
+                    };
+                    hit
+                }
+            };
+            charge(&mut out, allowance, hit);
+        }
+        Ok(out)
+    }
+
+    async fn chunk_hit(&self, item: &ItemRef, score: f32, c: &Chunk) -> Result<Hit> {
+        let title = self.source_title(&c.corpus, &c.source_id).await?;
+        Ok(chunk_hit_titled(&*self.tokenizer, item, score, c, title))
+    }
+
+    /// `None` when the fact is not visible at `as_of` or its first
+    /// evidence is gone.
+    async fn fact_hit(
+        &self,
+        item: &ItemRef,
+        score: f32,
+        f: &Fact,
+        as_of: AsOf,
+    ) -> Result<Option<Hit>> {
+        let Some(view) = fact_as_of(f, as_of) else {
+            return Ok(None);
+        };
+        let summary = summary_of(&view.version, view.valid);
+        let text = render_fact(&f.text, &summary);
+        let first = &view.evidence[0];
+        let Some(citation) = self.citation_for_evidence(first).await? else {
+            return Ok(None);
+        };
+        let ep = self.ledger.episode(&f.corpus, &first.episode_id).await?;
+        Ok(Some(Hit {
+            item: item.clone(),
+            rank: 0,
+            score,
+            tokens: self.tokenizer.count(&text),
+            text,
+            source_id: first.source_id.clone(),
+            occurred_at: ep.and_then(|e| e.occurred_at),
+            fact: Some(summary),
+            citation,
+        }))
+    }
+
+    /// The corpus snapshot at the current partition generations.
+    async fn snapshot(&self, corpus: &str) -> Result<Arc<Snapshot>> {
+        let mut key = self.ledger.partitions(corpus).await?;
+        key.sort();
+        if let Some(s) = self.snapshots.get(corpus, &key) {
+            return Ok(s);
+        }
+        let _t = timing::span("knowledge.snapshot").items(1);
+        let ids = self.ledger.point_ids(corpus).await?;
+        let (mut chunk_ids, mut fact_ids) = (Vec::new(), Vec::new());
+        for id in ids {
+            match ItemRef::from_point_id(&id) {
+                Some(ItemRef::Chunk(id)) => chunk_ids.push(id),
+                Some(ItemRef::Fact(id)) => fact_ids.push(id),
+                None => {}
+            }
+        }
+        let chunks = self.ledger.chunks(corpus, &chunk_ids).await?;
+        let facts = self.ledger.facts(corpus, &fact_ids).await?;
+        let snap = Arc::new(Snapshot::new(key, chunks, facts));
+        self.snapshots.put(corpus, snap.clone());
+        Ok(snap)
+    }
+
+    /// [`LexicalMode::Bm25`] search: rank only what the reader can see,
+    /// fuse, optionally rerank the head, then fill the allowance in order.
+    #[allow(clippy::too_many_arguments)]
+    async fn search_visible(
+        &self,
+        req: &SearchRequest,
+        allowance: &mut EvidenceAllowance,
+        params: Bm25Params,
+        parts: &[String],
+        limit: usize,
+        pool: usize,
+        mut out: SearchResult,
+    ) -> Result<SearchResult> {
+        let snap = self.snapshot(&req.corpus).await?;
+        let vis = snap.visible(parts, &req.access, req.as_of);
+        let lexical: Vec<String> = snap
+            .bm25(params, &vis)
+            .search(&req.query, pool)
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        // Over-fetch by the number of invisible items so filtering cannot
+        // empty the pool.
+        let vector = match self
+            .vector_candidates(&req.corpus, parts, &req.query, pool + vis.hidden)
+            .await
+        {
+            Ok(v) => v
+                .into_iter()
+                .filter(|id| vis.by_id.contains_key(id))
+                .take(pool)
+                .collect(),
+            Err(_) => {
+                out.degraded.push("vector_unavailable".into());
+                Vec::new()
+            }
+        };
+        if self.vectors.is_none() {
+            out.degraded.push("vector_disabled".into());
+        }
+        let mut fused: Vec<(u32, f32)> = rrf(&[lexical, vector], self.config.rrf_k)
+            .into_iter()
+            .filter_map(|(id, s)| vis.by_id.get(&id).map(|&i| (i, s)))
+            .collect();
+        if let Some((reranker, top_n)) = &self.reranker {
+            let head = fused.len().min(*top_n);
+            if head > 1 {
+                let texts: Vec<String> = fused[..head]
+                    .iter()
+                    .map(|&(i, _)| rerank_text(&snap, i, req.as_of))
+                    .collect();
+                let scores = reranker.score(&req.query, &texts).await?;
+                let mut order: Vec<usize> = (0..head).collect();
+                // Stable: equal scores keep their fused order.
+                order.sort_by(|&a, &b| {
+                    scores[b]
+                        .partial_cmp(&scores[a])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let reordered: Vec<(u32, f32)> = order.iter().map(|&j| fused[j]).collect();
+                fused.splice(..head, reordered);
+            }
+        }
+        // One title lookup per source rather than per hit.
+        let mut titles: HashMap<String, String> = HashMap::new();
+        for (i, score) in fused {
+            if out.hits.len() >= limit {
+                break;
+            }
+            let item = ItemRef::from_point_id(snap.id(i)).expect("snapshot ids are point ids");
+            let hit = match snap.chunks.get(i as usize) {
+                Some(c) => {
+                    let title = match titles.get(&c.source_id) {
+                        Some(t) => t.clone(),
+                        None => {
+                            let t = self.source_title(&c.corpus, &c.source_id).await?;
+                            titles.insert(c.source_id.clone(), t.clone());
+                            t
+                        }
+                    };
+                    chunk_hit_titled(&*self.tokenizer, &item, score, c, title)
+                }
+                None => {
+                    let f = &snap.facts[i as usize - snap.chunks.len()];
+                    let Some(hit) = self.fact_hit(&item, score, f, req.as_of).await? else {
+                        continue;
+                    };
+                    hit
+                }
+            };
+            charge(&mut out, allowance, hit);
+        }
+        Ok(out)
+    }
+
+    async fn vector_candidates(
+        &self,
+        corpus: &str,
+        parts: &[String],
+        query: &str,
+        pool: usize,
+    ) -> Result<Vec<String>> {
+        let Some((index, _)) = &self.vectors else {
+            return Ok(Vec::new());
+        };
+        self.ensure_collection().await?;
+        let q = self
+            .embedder
+            .embed(&[query.to_string()])
+            .await?
+            .vectors
+            .pop()
+            .unwrap_or_default();
+        let mut hits: Vec<ScoredId> = Vec::new();
+        for p in parts {
+            hits.extend(
+                index
+                    .search(&self.config.collection, &namespace(corpus, p), &q, pool)
+                    .await?,
+            );
+        }
+        Ok(keep_store::rank(hits, pool)
+            .into_iter()
+            .map(|h| h.id)
+            .collect())
+    }
+
+    /// Fetch one chunk or fact by id with its evidence, charged against the
+    /// allowance. Unknown and unreadable ids are indistinguishable.
+    pub async fn fetch(
+        &self,
+        corpus: &str,
+        access: &Access,
+        id: &str,
+        as_of: AsOf,
+        allowance: &mut EvidenceAllowance,
+    ) -> Result<FetchResult> {
+        let item = ItemRef::from_point_id(id).ok_or(KnowledgeError::NotFound)?;
+        match item {
+            ItemRef::Chunk(id) => {
+                let c = self
+                    .ledger
+                    .chunks(corpus, std::slice::from_ref(&id))
+                    .await?
+                    .pop()
+                    .filter(|c| access.allows(&c.partition) && chunk_visible(c, as_of))
+                    .ok_or(KnowledgeError::NotFound)?;
+                let text = render_chunk(&c);
+                let tokens = self.tokenizer.count(&text);
+                if !allowance.try_charge(tokens) {
+                    return Err(KnowledgeError::BudgetExhausted);
+                }
+                let citation = self.citation_for_chunk(&c).await?;
+                Ok(FetchResult {
+                    item: Fetched::Chunk { chunk: c, citation },
+                    text,
+                    tokens,
+                    truncated: false,
+                })
+            }
+            ItemRef::Fact(id) => {
+                let f = self
+                    .ledger
+                    .facts(corpus, std::slice::from_ref(&id))
+                    .await?
+                    .pop()
+                    .filter(|f| access.allows(&f.partition))
+                    .ok_or(KnowledgeError::NotFound)?;
+                let view = fact_as_of(&f, as_of).ok_or(KnowledgeError::NotFound)?;
+                let summary = summary_of(&view.version, view.valid);
+                let mut text = render_fact(&f.text, &summary);
+                let mut tokens = self.tokenizer.count(&text);
+                if !allowance.try_charge(tokens) {
+                    return Err(KnowledgeError::BudgetExhausted);
+                }
+                let mut citations = Vec::new();
+                let mut truncated = false;
+                for e in &view.evidence {
+                    let Some(c) = self.citation_for_evidence(e).await? else {
+                        continue;
+                    };
+                    let line = format!(
+                        "\n  evidence {}: [{}] {}: \"{}\"",
+                        c.reference,
+                        render_date(c.occurred_at),
+                        c.speaker,
+                        c.quote
+                    );
+                    let t = self.tokenizer.count(&line);
+                    if !allowance.try_charge(t) {
+                        truncated = true;
+                        break;
+                    }
+                    text.push_str(&line);
+                    tokens += t;
+                    citations.push(c);
+                }
+                // Only expose the versions and evidence visible to this read.
+                let mut fact = f.clone();
+                fact.versions
+                    .retain(|v| as_of.known_at.is_none_or(|t| v.recorded_at <= t));
+                fact.evidence = view.evidence;
+                Ok(FetchResult {
+                    item: Fetched::Fact {
+                        fact,
+                        summary,
+                        citations,
+                    },
+                    text,
+                    tokens,
+                    truncated,
+                })
+            }
+        }
+    }
+
+    /// Resolve a chunk, evidence or fact id to stable citations.
+    pub async fn cite(&self, corpus: &str, access: &Access, id: &str) -> Result<Vec<Citation>> {
+        if id.starts_with("ev_") {
+            let e = self
+                .ledger
+                .evidence(corpus, id)
+                .await?
+                .filter(|e| access.allows(&e.partition))
+                .ok_or(KnowledgeError::NotFound)?;
+            return Ok(vec![
+                self.citation_for_evidence(&e)
+                    .await?
+                    .ok_or(KnowledgeError::NotFound)?,
+            ]);
+        }
+        match ItemRef::from_point_id(id).ok_or(KnowledgeError::NotFound)? {
+            ItemRef::Chunk(cid) => {
+                let c = self
+                    .ledger
+                    .chunks(corpus, &[cid])
+                    .await?
+                    .pop()
+                    .filter(|c| access.allows(&c.partition))
+                    .ok_or(KnowledgeError::NotFound)?;
+                Ok(vec![self.citation_for_chunk(&c).await?])
+            }
+            ItemRef::Fact(fid) => {
+                let f = self
+                    .ledger
+                    .facts(corpus, &[fid])
+                    .await?
+                    .pop()
+                    .filter(|f| access.allows(&f.partition))
+                    .ok_or(KnowledgeError::NotFound)?;
+                let mut out = Vec::new();
+                for e in &f.evidence {
+                    if let Some(c) = self.citation_for_evidence(e).await? {
+                        out.push(c);
+                    }
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    /// Entities and facts around a starting entity (id, name or alias).
+    /// Depth is capped at 2, fan-out per entity at 25, nodes at the
+    /// configured maximum.
+    pub async fn traverse(
+        &self,
+        corpus: &str,
+        access: &Access,
+        start: &str,
+        depth: usize,
+        fanout: usize,
+        as_of: AsOf,
+    ) -> Result<Neighbourhood> {
+        let parts = self.readable(corpus, access).await?;
+        let mut out = Neighbourhood::default();
+        if parts.is_empty() {
+            return Ok(out);
+        }
+        let depth = depth.clamp(1, 2);
+        let fanout = fanout.clamp(1, 25);
+        let max_nodes = self.config.max_traverse_nodes;
+        let mut frontier: Vec<Entity> = match self.ledger.entity(corpus, start).await? {
+            Some(e) if access.allows(&e.partition) => vec![e],
+            _ => {
+                self.ledger
+                    .entities_named(corpus, &parts, &normalize_name(start))
+                    .await?
+            }
+        };
+        let mut seen: BTreeSet<String> = frontier.iter().map(|e| e.id.clone()).collect();
+        let mut edge_ids = BTreeSet::new();
+        out.nodes.extend(frontier.iter().cloned());
+        for _ in 0..depth {
+            let mut next = Vec::new();
+            for e in &frontier {
+                let facts = self
+                    .ledger
+                    .facts_about(corpus, &parts, &e.id, fanout + 1)
+                    .await?;
+                if facts.len() > fanout {
+                    out.truncated = true;
+                }
+                for f in facts.into_iter().take(fanout) {
+                    if !access.allows(&f.partition) {
+                        continue;
+                    }
+                    let Some(view) = fact_as_of(&f, as_of) else {
+                        continue;
+                    };
+                    if edge_ids.insert(f.id.clone()) {
+                        out.edges.push(Edge {
+                            fact_id: f.id.clone(),
+                            subject: f.subject.clone(),
+                            predicate: f.predicate.clone(),
+                            object: f.object.clone(),
+                            object_entity: f.object_entity.clone(),
+                            summary: summary_of(&view.version, view.valid),
+                        });
+                    }
+                    for other in [Some(f.subject.clone()), f.object_entity.clone()]
+                        .into_iter()
+                        .flatten()
+                    {
+                        if seen.contains(&other) {
+                            continue;
+                        }
+                        if seen.len() >= max_nodes {
+                            out.truncated = true;
+                            continue;
+                        }
+                        if let Some(n) = self.ledger.entity(corpus, &other).await?
+                            && access.allows(&n.partition)
+                        {
+                            seen.insert(other);
+                            out.nodes.push(n.clone());
+                            next.push(n);
+                        }
+                    }
+                }
+            }
+            frontier = next;
+        }
+        Ok(out)
+    }
+
+    /// The book index for what the caller may read.
+    pub async fn index(
+        &self,
+        corpus: &str,
+        access: &Access,
+        req: &IndexRequest,
+    ) -> Result<IndexView> {
+        for _ in 0..3 {
+            let parts: Vec<(String, i64)> = self
+                .ledger
+                .partitions(corpus)
+                .await?
+                .into_iter()
+                .filter(|(p, _)| access.allows(p))
+                .collect();
+            let mut built: Vec<(String, IndexInputs)> = Vec::new();
+            for (p, generation) in &parts {
+                built.push((
+                    p.clone(),
+                    self.partition_index(corpus, p, *generation).await?,
+                ));
+            }
+            // If anything was written meanwhile, rebuild rather than serve a
+            // view that may include something just erased.
+            let after: Vec<(String, i64)> = self
+                .ledger
+                .partitions(corpus)
+                .await?
+                .into_iter()
+                .filter(|(p, _)| access.allows(p))
+                .collect();
+            let consistent = after == parts
+                && built
+                    .iter()
+                    .zip(&parts)
+                    .all(|((_, b), (_, g))| b.generation == *g);
+            if consistent {
+                return Ok(render(
+                    corpus,
+                    &built,
+                    req,
+                    self.tokenizer.as_ref(),
+                    self.clock.now(),
+                ));
+            }
+        }
+        Err(KnowledgeError::Conflict(
+            "index kept changing while it was read".into(),
+        ))
+    }
+
+    async fn partition_index(
+        &self,
+        corpus: &str,
+        partition: &str,
+        generation: i64,
+    ) -> Result<IndexInputs> {
+        if let Some((g, body)) = self.ledger.cached_index(corpus, partition).await?
+            && g == generation
+            && let Ok(inputs) = serde_json::from_str::<IndexInputs>(&body)
+            && inputs.generation == generation
+        {
+            return Ok(inputs);
+        }
+        let inputs = normalize(self.ledger.index_inputs(corpus, partition).await?);
+        let body =
+            serde_json::to_string(&inputs).map_err(|e| KnowledgeError::Storage(e.to_string()))?;
+        self.ledger
+            .store_index(corpus, partition, inputs.generation, &body)
+            .await?;
+        Ok(inputs)
+    }
+
+    // ----- forgetting ------------------------------------------------------
+
+    /// Erase a source and everything derived only from it, including vector
+    /// points and index entries, and journal the erasure without content.
+    pub async fn forget_source(
+        &self,
+        corpus: &str,
+        source_id: &str,
+    ) -> Result<Option<ForgetReport>> {
+        let now = self.clock.now();
+        self.snapshots.forget(corpus);
+        let Some(report) = self.ledger.purge_source(corpus, source_id, now).await? else {
+            return Ok(None);
+        };
+        let mut out = ForgetReport {
+            episodes: report.episodes,
+            chunks: report.chunks,
+            facts_deleted: report.facts_deleted,
+            facts_kept: report.facts_kept,
+            vectors_deleted: 0,
+            vectors_deferred: 0,
+        };
+        if let Some((index, _)) = &self.vectors
+            && !report.point_ids.is_empty()
+        {
+            let ns = namespace(corpus, &report.partition);
+            match index
+                .delete_points(&self.config.collection, &ns, &report.point_ids)
+                .await
+            {
+                Ok(()) => out.vectors_deleted = report.point_ids.len(),
+                Err(_) => {
+                    let jobs: Vec<NewJob> = report
+                        .point_ids
+                        .iter()
+                        .map(|id| NewJob {
+                            kind: JobKind::Unproject,
+                            target: format!("{ns}\u{1f}{id}"),
+                        })
+                        .collect();
+                    self.ledger.enqueue(corpus, &jobs, now).await?;
+                    out.vectors_deferred = jobs.len();
+                }
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// Remove a whole corpus from the ledger and the vector projection.
+    pub async fn delete_corpus(&self, corpus: &str) -> Result<()> {
+        let _t = timing::span("knowledge.delete_corpus").items(1);
+        self.snapshots.forget(corpus);
+        let parts = self.ledger.delete_corpus(corpus).await?;
+        if let Some((index, _)) = &self.vectors {
+            for p in parts {
+                index
+                    .delete_namespace(&self.config.collection, &namespace(corpus, &p))
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Queue re-projection of every chunk and fact, e.g. after replacing the
+    /// vector backend. The ledger stays the source of truth.
+    pub async fn rebuild_projection(&self, corpus: &str) -> Result<usize> {
+        let jobs: Vec<NewJob> = self
+            .ledger
+            .point_ids(corpus)
+            .await?
+            .into_iter()
+            .map(|target| NewJob {
+                kind: JobKind::Project,
+                target,
+            })
+            .collect();
+        self.ledger.enqueue(corpus, &jobs, self.clock.now()).await?;
+        Ok(jobs.len())
+    }
+}
+
+fn retryable(e: &KnowledgeError) -> bool {
+    match e {
+        KnowledgeError::Provider(p) => p.retryable(),
+        KnowledgeError::Vector(_) | KnowledgeError::Storage(_) | KnowledgeError::Conflict(_) => {
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Midnight UTC on a date, for fixtures and tests.
+pub fn day(y: i32, m: u32, d: u32) -> DateTime<Utc> {
+    use chrono::TimeZone;
+    Utc.with_ymd_and_hms(y, m, d, 0, 0, 0)
+        .single()
+        .expect("valid date")
+}
+
+fn chunk_citation(c: &Chunk, title: String) -> Citation {
+    Citation {
+        reference: format!("keep:{}", c.id),
+        source_id: c.source_id.clone(),
+        source_title: title,
+        episode_id: c.episode_id.clone(),
+        speaker: c.speaker.clone(),
+        occurred_at: c.occurred_at,
+        char_start: c.char_start,
+        char_end: c.char_end,
+        quote: c.text.clone(),
+    }
+}
+
+fn chunk_hit_titled(
+    tokenizer: &dyn Tokenizer,
+    item: &ItemRef,
+    score: f32,
+    c: &Chunk,
+    title: String,
+) -> Hit {
+    let text = render_chunk(c);
+    Hit {
+        item: item.clone(),
+        rank: 0,
+        score,
+        tokens: tokenizer.count(&text),
+        text,
+        source_id: c.source_id.clone(),
+        occurred_at: c.occurred_at,
+        fact: None,
+        citation: chunk_citation(c, title),
+    }
+}

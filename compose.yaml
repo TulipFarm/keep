@@ -1,0 +1,40 @@
+# Local backing services for Keep's two storage profiles.
+#
+#   docker compose --profile postgres-vector up -d   # Postgres + pgvector
+#   docker compose --profile postgres-qdrant up -d   # Postgres + Qdrant
+#
+# Host ports are deliberately non-default (15433, 16333) so the stack can run
+# next to other local Postgres or Qdrant instances. Both bind to loopback only.
+# Credentials here are for local development and tests, never for deployment.
+
+name: keep-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.2-pg18
+    profiles: ["postgres-vector", "postgres-qdrant"]
+    environment:
+      POSTGRES_USER: keep
+      POSTGRES_PASSWORD: keep-local-only
+      POSTGRES_DB: keep
+    ports:
+      - "127.0.0.1:15433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keep -d keep"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    profiles: ["postgres-qdrant"]
+    ports:
+      - "127.0.0.1:16333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+volumes:
+  postgres-data:
+  qdrant-data:

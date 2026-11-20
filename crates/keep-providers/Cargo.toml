@@ -1,0 +1,36 @@
+[package]
+name = "keep-providers"
+description = "Model, embedding and tokenizer provider contracts for Keep, with dispatch guards, budgets and offline mocks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+keep-core.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tiktoken-rs.workspace = true
+tokio = { workspace = true, features = ["process", "sync"] }
+fastembed = { workspace = true, optional = true }
+
+[features]
+# Local ONNX sentence embeddings (fastembed). Off by default so offline
+# builds and tests never fetch ONNX Runtime or model weights.
+local-embeddings = ["dep:fastembed"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
+
+[[example]]
+name = "embed_throughput"
+required-features = ["local-embeddings"]
