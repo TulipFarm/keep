@@ -38,8 +38,9 @@ pub mod time_ref;
 pub use budget::{DEFAULT_EVIDENCE_TOKENS, EvidenceAllowance, MAX_EVIDENCE_TOKENS};
 pub use engine::{
     Citation, Clock, EpisodeInput, ExternalClaim, FetchResult, Fetched, ForgetReport, Hit, JobRun,
-    Knowledge, KnowledgeConfig, LexicalMode, ManualClock, Neighbourhood, SearchRequest,
-    SearchResult, SourceInput, SystemClock,
+    Knowledge, KnowledgeConfig, LexicalMode, MAX_METADATA_KEY_BYTES, MAX_METADATA_KEYS,
+    MAX_METADATA_VALUE_BYTES, ManualClock, Neighbourhood, SearchRequest, SearchResult, SourceInput,
+    SystemClock, validate_metadata,
 };
 pub use index::{IndexRequest, IndexView};
 pub use ledger::{KnowledgeError, Ledger};

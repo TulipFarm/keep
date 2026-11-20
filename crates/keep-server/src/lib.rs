@@ -10,6 +10,7 @@ pub mod embedder;
 pub mod error;
 pub mod http;
 pub mod mcp;
+pub mod model;
 pub mod scope;
 pub mod service;
 pub mod settings;

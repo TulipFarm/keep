@@ -1,6 +1,8 @@
 //! Request types and the tool catalogue. MCP tool names, HTTP routes and
 //! input schemas all come from here, so both transports stay in step.
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
@@ -275,6 +277,17 @@ pub struct KnowledgeIngestReq {
     /// Conversation turns. Give this or `text`.
     #[serde(default)]
     pub episodes: Option<Vec<EpisodeArg>>,
+    /// Small string map returned with every citation from this source, such
+    /// as a host's document URL or id. At most 16 keys of up to 64 bytes,
+    /// values up to 1024 bytes.
+    #[serde(default)]
+    pub metadata: Option<BTreeMap<String, String>>,
+    /// Replace an existing source with this revision: if its text, episodes
+    /// or metadata differ, the old content and everything derived only from
+    /// it is erased and the new content stored in one step. Without it,
+    /// changed content under the same `source_id` is a conflict.
+    #[serde(default)]
+    pub replace: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -295,6 +308,15 @@ pub struct KnowledgeSearchReq {
     /// Only facts true at that time: RFC 3339 or `YYYY-MM-DD`.
     #[serde(default)]
     pub valid_at: Option<String>,
+    /// Only results derived from these source ids. An empty list matches
+    /// nothing. At most 1000 ids.
+    #[serde(default)]
+    pub source_ids: Option<Vec<String>>,
+    /// Only results derived from sources in these collections. Combined
+    /// with `source_ids`, a source must match both. An empty list matches
+    /// nothing.
+    #[serde(default)]
+    pub collections: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -310,6 +332,15 @@ pub struct KnowledgeFetchReq {
     pub as_of: Option<String>,
     #[serde(default)]
     pub valid_at: Option<String>,
+    /// Only results derived from these source ids. An empty list matches
+    /// nothing. At most 1000 ids.
+    #[serde(default)]
+    pub source_ids: Option<Vec<String>>,
+    /// Only results derived from sources in these collections. Combined
+    /// with `source_ids`, a source must match both. An empty list matches
+    /// nothing.
+    #[serde(default)]
+    pub collections: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -332,6 +363,15 @@ pub struct KnowledgeIndexReq {
     pub cursor: Option<usize>,
     #[serde(default)]
     pub budget_tokens: Option<usize>,
+    /// Only results derived from these source ids. An empty list matches
+    /// nothing. At most 1000 ids.
+    #[serde(default)]
+    pub source_ids: Option<Vec<String>>,
+    /// Only results derived from sources in these collections. Combined
+    /// with `source_ids`, a source must match both. An empty list matches
+    /// nothing.
+    #[serde(default)]
+    pub collections: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -350,6 +390,15 @@ pub struct KnowledgeCiteReq {
     /// A search hit's `item.id` (`chunk_...` or `fact_...`) or an evidence
     /// id (`ev_...`).
     pub id: String,
+    /// Only results derived from these source ids. An empty list matches
+    /// nothing. At most 1000 ids.
+    #[serde(default)]
+    pub source_ids: Option<Vec<String>>,
+    /// Only results derived from sources in these collections. Combined
+    /// with `source_ids`, a source must match both. An empty list matches
+    /// nothing.
+    #[serde(default)]
+    pub collections: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -369,6 +418,15 @@ pub struct KnowledgeTraverseReq {
     pub as_of: Option<String>,
     #[serde(default)]
     pub valid_at: Option<String>,
+    /// Only results derived from these source ids. An empty list matches
+    /// nothing. At most 1000 ids.
+    #[serde(default)]
+    pub source_ids: Option<Vec<String>>,
+    /// Only results derived from sources in these collections. Combined
+    /// with `source_ids`, a source must match both. An empty list matches
+    /// nothing.
+    #[serde(default)]
+    pub collections: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -396,6 +454,32 @@ pub struct MemoryExportReq {
 pub struct KnowledgeStatusReq {
     #[serde(default)]
     pub scope: Option<ScopeArg>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeSummarizeReq {
+    #[serde(default)]
+    pub scope: Option<ScopeArg>,
+    /// An ingested source readable in this scope. Give this, `text` or
+    /// `episodes`.
+    #[serde(default)]
+    pub source_id: Option<String>,
+    /// Text to summarize.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Conversation turns to summarize. At most 200.
+    #[serde(default)]
+    pub episodes: Option<Vec<EpisodeArg>>,
+    /// With `source_id`, the source must be one of these ids, else it is
+    /// not found. An empty list matches nothing. At most 1000 ids.
+    #[serde(default)]
+    pub source_ids: Option<Vec<String>>,
+    /// With `source_id`, the source must belong to one of these
+    /// collections, else it is not found. Combined with `source_ids`, it
+    /// must match both. An empty list matches nothing.
+    #[serde(default)]
+    pub collections: Option<Vec<String>>,
 }
 
 /// One tool, exposed as an MCP tool and as `POST /v1/{area}/{op}`.
@@ -581,6 +665,14 @@ pub const TOOLS: &[ToolSpec] = &[
         false,
         "Walk the knowledge graph around an entity (id, name or alias): entities and \
          the facts linking them, up to 2 hops and 25 facts per entity."
+    ),
+    tool!(
+        "knowledge_summarize",
+        KnowledgeSummarizeReq,
+        true,
+        false,
+        "Summarize an ingested source, some text or conversation turns in a few \
+         sentences with the configured model. Unavailable when no model is configured."
     ),
     tool!(
         "knowledge_status",

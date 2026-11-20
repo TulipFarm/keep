@@ -24,7 +24,9 @@ use keep_providers::{ChatModel, ChatRequest, Message, ProviderError, Usage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::model::{Time, TimeBasis};
+use crate::engine::ExternalClaim;
+use crate::extract::Claim;
+use crate::model::{Episode, Time, TimeBasis};
 
 /// Bumped whenever the prompt or the rendering of a session changes, so
 /// cached replies from an older prompt are never reused.
@@ -552,6 +554,97 @@ pub fn parse_reply(
         }
     }
     Ok((facts, dropped))
+}
+
+/// The claims one session's facts become. Events carry their date in the
+/// object, so the same kind of event on two dates stays two facts while a
+/// restatement of one event only adds evidence.
+pub fn claims_for(facts: &[SessionFact]) -> Vec<ExternalClaim> {
+    facts
+        .iter()
+        .map(|f| {
+            let object = match (f.kind, f.valid_from) {
+                (FactKind::Event, Some(t)) => format!("{} @ {}", f.value, t.date_naive()),
+                _ => f.value.clone(),
+            };
+            ExternalClaim {
+                claim: Claim {
+                    subject: f.subject.clone(),
+                    subject_kind: "person".into(),
+                    predicate: f.attribute.clone(),
+                    object,
+                    object_kind: None,
+                    valid_from: f.valid_from,
+                    basis: f.basis,
+                    quote: String::new(),
+                },
+                text: Some(f.statement.clone()),
+                single_valued: f.kind == FactKind::State,
+                episodes: f.turns.clone(),
+            }
+        })
+        .collect()
+}
+
+/// Turns of one window sent per model call when reading a single episode.
+pub const EPISODE_TURNS_PER_CALL: usize = 8;
+
+/// One episode as sessions the extractor can read whole: its text cut at
+/// whitespace into turns of at most [`MAX_TURN_CHARS`] (so nothing is
+/// truncated), at most [`EPISODE_TURNS_PER_CALL`] turns per session. Every
+/// turn carries the episode's id, so facts cite the episode.
+pub fn episode_sessions(ep: &Episode) -> Vec<SessionInput> {
+    let turns = text_turns(&ep.id, &ep.speaker, &ep.text);
+    turns
+        .chunks(EPISODE_TURNS_PER_CALL)
+        .enumerate()
+        .map(|(i, t)| SessionInput {
+            id: format!("{}#w{}", ep.id, i + 1),
+            date: ep.occurred_at,
+            turns: t.to_vec(),
+        })
+        .collect()
+}
+
+/// `text` as turns of at most [`MAX_TURN_CHARS`], cut at whitespace, all
+/// with the id `id`. An empty speaker reads as `document`.
+pub fn text_turns(id: &str, speaker: &str, text: &str) -> Vec<SessionTurn> {
+    let speaker = if speaker.trim().is_empty() {
+        "document"
+    } else {
+        speaker
+    };
+    split_text(text, MAX_TURN_CHARS)
+        .into_iter()
+        .map(|text| SessionTurn {
+            id: id.to_owned(),
+            speaker: speaker.to_owned(),
+            // Assistant turns are cut short in the prompt; a single episode
+            // is read in full whoever wrote it.
+            assistant: false,
+            text,
+        })
+        .collect()
+}
+
+/// `text` in pieces of at most `max` characters, cut at the last
+/// whitespace before the limit when there is one.
+fn split_text(text: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text.trim();
+    while !rest.is_empty() {
+        let Some((limit, _)) = rest.char_indices().nth(max) else {
+            out.push(rest.to_string());
+            break;
+        };
+        let cut = rest[..limit]
+            .rfind(char::is_whitespace)
+            .filter(|&i| i > 0)
+            .unwrap_or(limit);
+        out.push(rest[..cut].trim_end().to_string());
+        rest = rest[cut..].trim_start();
+    }
+    out
 }
 
 /// Extracts facts from whole sessions through a chat model, with an

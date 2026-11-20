@@ -10,8 +10,8 @@ use keep_store::{Bm25Index, Bm25Params, LexicalIndex, ScoredId};
 
 use crate::ledger::{
     ApplyOutcome, ChangeSet, EntityStat, IndexInputs, IngestBatch, IngestReport, KnowledgeError,
-    Ledger, MAX_JOB_ATTEMPTS, Projection, PurgeReport, Result, SourceStat, normalize_name,
-    retry_delay,
+    Ledger, MAX_JOB_ATTEMPTS, Projection, PurgeReport, Result, SourceStat, episode_set,
+    normalize_name, retry_delay, same_source,
 };
 use crate::model::{
     Chunk, Entity, Episode, ErasureEntry, Evidence, Fact, FactStatus, Job, JobCounts, JobKind,
@@ -67,22 +67,131 @@ impl State {
         }
     }
 
+    /// Delete a source and everything derived only from it.
+    fn purge(&mut self, corpus: &str, source_id: &str, now: Time) -> Option<PurgeReport> {
+        let s = self;
+        let src = s.sources.remove(&key(corpus, source_id))?;
+        let mut report = PurgeReport {
+            partition: src.partition.clone(),
+            ..Default::default()
+        };
+        let episode_ids: BTreeSet<String> = s
+            .episodes
+            .values()
+            .filter(|e| e.corpus == corpus && e.source_id == source_id)
+            .map(|e| e.id.clone())
+            .collect();
+        for id in &episode_ids {
+            s.episodes.remove(&key(corpus, id));
+        }
+        report.episodes = episode_ids.len() as i64;
+        let chunk_ids: Vec<String> = s
+            .chunks
+            .values()
+            .filter(|c| c.corpus == corpus && c.source_id == source_id)
+            .map(|c| c.id.clone())
+            .collect();
+        for id in &chunk_ids {
+            s.chunks.remove(&key(corpus, id));
+        }
+        report.chunks = chunk_ids.len() as i64;
+        report.point_ids.extend(chunk_ids.iter().cloned());
+
+        let mut dead = BTreeSet::new();
+        for f in s.facts.values_mut().filter(|f| f.corpus == corpus) {
+            let before = f.evidence.len();
+            f.evidence.retain(|e| e.source_id != source_id);
+            if f.evidence.len() != before {
+                if f.evidence.is_empty() {
+                    dead.insert(f.id.clone());
+                } else {
+                    report.facts_kept += 1;
+                    report.kept_fact_ids.push(f.id.clone());
+                }
+            }
+        }
+        for id in &dead {
+            s.facts.remove(&key(corpus, id));
+        }
+        report.facts_deleted = dead.len() as i64;
+        report.point_ids.extend(dead.iter().cloned());
+        for f in s.facts.values_mut().filter(|f| f.corpus == corpus) {
+            splice_versions(f, &dead);
+        }
+
+        for (_, m) in s.aliases.iter_mut().filter(|((c, _), _)| c == corpus) {
+            for srcs in m.values_mut() {
+                srcs.remove(source_id);
+            }
+            m.retain(|_, srcs| !srcs.is_empty());
+        }
+        let referenced: BTreeSet<String> = s
+            .facts
+            .values()
+            .filter(|f| f.corpus == corpus)
+            .flat_map(|f| std::iter::once(f.subject.clone()).chain(f.object_entity.clone()))
+            .collect();
+        let orphans: Vec<Key> = s
+            .entities
+            .iter()
+            .filter(|((c, id), _)| c == corpus && !referenced.contains(id))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in orphans {
+            s.entities.remove(&k);
+            s.aliases.remove(&k);
+        }
+        let chunk_set: BTreeSet<&String> = chunk_ids.iter().collect();
+        s.jobs.retain(|j| {
+            j.corpus != corpus
+                || matches!(j.state, JobState::Succeeded | JobState::Failed)
+                || !(episode_ids.contains(&j.target) || chunk_set.contains(&j.target))
+        });
+        s.bump(corpus, &src.partition);
+        s.index_cache.remove(&key(corpus, &src.partition));
+        let seq = s.journal.len() as i64 + 1;
+        s.journal.push(ErasureEntry {
+            seq,
+            corpus_digest: digest_hex(&[corpus]),
+            target_kind: "source".into(),
+            target_digest: digest_hex(&[corpus, source_id]),
+            erased_at: now,
+            episodes: report.episodes,
+            chunks: report.chunks,
+            facts: report.facts_deleted,
+        });
+        Some(report)
+    }
+
     fn entity_with_aliases(&self, e: &Entity) -> Entity {
-        let mut e = e.clone();
-        e.aliases = self
-            .aliases
+        self.entity_with_aliases_from(e, None)
+    }
+
+    /// Aliases of `e`; with `sources`, only those stated by one of them.
+    fn aliases_of(&self, e: &Entity, sources: Option<&[String]>) -> BTreeSet<String> {
+        self.aliases
             .get(&key(&e.corpus, &e.id))
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
+            .map(|m| {
+                m.iter()
+                    .filter(|(_, by)| sources.is_none_or(|s| by.iter().any(|x| s.contains(x))))
+                    .map(|(a, _)| a.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn entity_with_aliases_from(&self, e: &Entity, sources: Option<&[String]>) -> Entity {
+        let mut e = e.clone();
+        e.aliases = self.aliases_of(&e, sources);
         e
     }
 
-    fn entity_matches(&self, e: &Entity, normalized: &str) -> bool {
+    fn entity_matches(&self, e: &Entity, normalized: &str, sources: Option<&[String]>) -> bool {
         normalize_name(&e.name) == normalized
             || self
-                .aliases
-                .get(&key(&e.corpus, &e.id))
-                .is_some_and(|m| m.keys().any(|a| normalize_name(a) == normalized))
+                .aliases_of(e, sources)
+                .iter()
+                .any(|a| normalize_name(a) == normalized)
     }
 }
 
@@ -99,6 +208,11 @@ impl MemoryLedger {
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().expect("ledger lock poisoned")
     }
+}
+
+/// Whether a fact has evidence from one of `sources` (any fact without a filter).
+fn supported_by(f: &Fact, sources: Option<&[String]>) -> bool {
+    sources.is_none_or(|ids| f.evidence.iter().any(|e| ids.contains(&e.source_id)))
 }
 
 fn last_recorded(f: &Fact) -> Time {
@@ -121,19 +235,29 @@ impl Ledger for MemoryLedger {
         let src = &batch.source;
         let corpus = src.corpus.as_str();
         let mut report = IngestReport::default();
-        if let Some(existing) = s.sources.get(&key(corpus, &src.id))
-            && (existing.partition != src.partition
-                || existing.collection != src.collection
-                || existing.title != src.title
-                || existing.kind != src.kind)
-        {
-            return Err(KnowledgeError::Conflict(
-                "source already exists with different metadata".into(),
-            ));
+        let mut replace = false;
+        if let Some(existing) = s.sources.get(&key(corpus, &src.id)) {
+            let same_meta = same_source(existing, src);
+            replace = batch.replace && {
+                let held: BTreeSet<(String, String)> = s
+                    .episodes
+                    .values()
+                    .filter(|e| e.corpus == corpus && e.source_id == src.id)
+                    .map(|e| (e.id.clone(), e.content_hash.clone()))
+                    .collect();
+                !same_meta || held != episode_set(&batch.episodes)
+            };
+            if !replace && !same_meta {
+                return Err(KnowledgeError::Conflict(
+                    "source already exists with different metadata".into(),
+                ));
+            }
         }
         let mut fresh = Vec::new();
         for e in &batch.episodes {
             match s.episodes.get(&key(corpus, &e.id)) {
+                // Purged below before the new revision is inserted.
+                Some(old) if replace && old.source_id == src.id => fresh.push(e.id.clone()),
                 Some(old) if old.content_hash == e.content_hash && old.source_id == e.source_id => {
                     report.episodes_unchanged += 1;
                 }
@@ -145,11 +269,15 @@ impl Ledger for MemoryLedger {
                 None => fresh.push(e.id.clone()),
             }
         }
+        if replace {
+            report.purged = s.purge(corpus, &src.id, batch.now);
+            report.replaced = true;
+        }
         if let std::collections::btree_map::Entry::Vacant(slot) =
             s.sources.entry(key(corpus, &src.id))
         {
             slot.insert(src.clone());
-            report.source_created = true;
+            report.source_created = !report.replaced;
         }
         let mut jobs = Vec::new();
         for e in batch.episodes.iter().filter(|e| fresh.contains(&e.id)) {
@@ -174,7 +302,7 @@ impl Ledger for MemoryLedger {
         }
         report.jobs_enqueued = jobs.len();
         s.enqueue(corpus, &jobs, batch.now);
-        if report.source_created || report.episodes_added > 0 {
+        if report.source_created || report.replaced || report.episodes_added > 0 {
             s.bump(corpus, &src.partition);
         }
         Ok(report)
@@ -186,6 +314,18 @@ impl Ledger for MemoryLedger {
 
     async fn episode(&self, corpus: &str, id: &str) -> Result<Option<Episode>> {
         Ok(self.lock().episodes.get(&key(corpus, id)).cloned())
+    }
+
+    async fn source_episodes(&self, corpus: &str, source_id: &str) -> Result<Vec<Episode>> {
+        let mut eps: Vec<Episode> = self
+            .lock()
+            .episodes
+            .values()
+            .filter(|e| e.corpus == corpus && e.source_id == source_id)
+            .cloned()
+            .collect();
+        eps.sort_by_key(|e| e.ordinal);
+        Ok(eps)
     }
 
     async fn chunks(&self, corpus: &str, ids: &[String]) -> Result<Vec<Chunk>> {
@@ -231,7 +371,7 @@ impl Ledger for MemoryLedger {
         Ok(s.entities
             .values()
             .filter(|e| e.corpus == corpus && e.partition == partition)
-            .find(|e| s.entity_matches(e, normalized))
+            .find(|e| s.entity_matches(e, normalized, None))
             .map(|e| s.entity_with_aliases(e)))
     }
 
@@ -240,14 +380,28 @@ impl Ledger for MemoryLedger {
         corpus: &str,
         partitions: &[String],
         normalized: &str,
+        sources: Option<&[String]>,
     ) -> Result<Vec<Entity>> {
         let s = self.lock();
         Ok(s.entities
             .values()
             .filter(|e| e.corpus == corpus && partitions.contains(&e.partition))
-            .filter(|e| s.entity_matches(e, normalized))
-            .map(|e| s.entity_with_aliases(e))
+            .filter(|e| s.entity_matches(e, normalized, sources))
+            .map(|e| s.entity_with_aliases_from(e, sources))
             .collect())
+    }
+
+    async fn aliases_from(
+        &self,
+        corpus: &str,
+        entity_id: &str,
+        sources: &[String],
+    ) -> Result<BTreeSet<String>> {
+        let s = self.lock();
+        Ok(s.entities
+            .get(&key(corpus, entity_id))
+            .map(|e| s.aliases_of(e, Some(sources)))
+            .unwrap_or_default())
     }
 
     async fn current_facts(
@@ -277,6 +431,7 @@ impl Ledger for MemoryLedger {
         partitions: &[String],
         entity_id: &str,
         limit: usize,
+        sources: Option<&[String]>,
     ) -> Result<Vec<Fact>> {
         let s = self.lock();
         let mut out: Vec<Fact> = s
@@ -284,6 +439,7 @@ impl Ledger for MemoryLedger {
             .values()
             .filter(|f| f.corpus == corpus && partitions.contains(&f.partition))
             .filter(|f| f.subject == entity_id || f.object_entity.as_deref() == Some(entity_id))
+            .filter(|f| supported_by(f, sources))
             .cloned()
             .collect();
         out.sort_by(|a, b| {
@@ -298,7 +454,14 @@ impl Ledger for MemoryLedger {
     async fn apply(&self, c: ChangeSet) -> Result<ApplyOutcome> {
         let mut s = self.lock();
         let corpus = c.corpus.as_str();
-        if !s.episodes.contains_key(&key(corpus, &c.episode_id)) {
+        let current = |id: &str, hash: &str| {
+            s.episodes
+                .get(&key(corpus, id))
+                .is_some_and(|e| e.content_hash == hash)
+        };
+        if !s.episodes.contains_key(&key(corpus, &c.episode_id))
+            || !c.episodes.iter().all(|(id, hash)| current(id, hash))
+        {
             return Ok(ApplyOutcome::EpisodeGone);
         }
         if c.new_facts
@@ -375,6 +538,7 @@ impl Ledger for MemoryLedger {
         partitions: &[String],
         query: &str,
         limit: usize,
+        sources: Option<&[String]>,
     ) -> Result<Vec<ScoredId>> {
         let docs: Vec<(String, String)> = {
             let s = self.lock();
@@ -382,12 +546,16 @@ impl Ledger for MemoryLedger {
                 .chunks
                 .values()
                 .filter(|c| c.corpus == corpus && partitions.contains(&c.partition))
+                .filter(|c| sources.is_none_or(|ids| ids.contains(&c.source_id)))
                 .map(|c| (c.id.clone(), c.text.clone()));
             let facts = s
                 .facts
                 .values()
                 .filter(|f| {
-                    f.corpus == corpus && partitions.contains(&f.partition) && f.current().is_some()
+                    f.corpus == corpus
+                        && partitions.contains(&f.partition)
+                        && f.current().is_some()
+                        && supported_by(f, sources)
                 })
                 .map(|f| (f.id.clone(), f.text.clone()));
             chunks.chain(facts).collect()
@@ -405,11 +573,19 @@ impl Ledger for MemoryLedger {
             return Ok(Some(Projection {
                 partition: c.partition.clone(),
                 text: c.text.clone(),
+                sources: vec![c.source_id.clone()],
             }));
         }
         Ok(s.facts.get(&key(corpus, point_id)).map(|f| Projection {
             partition: f.partition.clone(),
             text: f.text.clone(),
+            sources: f
+                .evidence
+                .iter()
+                .map(|e| e.source_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
         }))
     }
 
@@ -544,8 +720,14 @@ impl Ledger for MemoryLedger {
             .collect())
     }
 
-    async fn index_inputs(&self, corpus: &str, partition: &str) -> Result<IndexInputs> {
+    async fn index_inputs(
+        &self,
+        corpus: &str,
+        partition: &str,
+        filter: Option<&[String]>,
+    ) -> Result<IndexInputs> {
         let s = self.lock();
+        let allowed = |id: &String| filter.is_none_or(|ids| ids.contains(id));
         let generation = s
             .generations
             .get(&key(corpus, partition))
@@ -555,11 +737,12 @@ impl Ledger for MemoryLedger {
             .facts
             .values()
             .filter(|f| f.corpus == corpus && f.partition == partition)
+            .filter(|f| supported_by(f, filter))
             .collect();
         let sources = s
             .sources
             .values()
-            .filter(|x| x.corpus == corpus && x.partition == partition)
+            .filter(|x| x.corpus == corpus && x.partition == partition && allowed(&x.id))
             .map(|src| {
                 let eps: Vec<&Episode> = s
                     .episodes
@@ -592,22 +775,43 @@ impl Ledger for MemoryLedger {
                 let srcs: BTreeSet<String> = about
                     .iter()
                     .flat_map(|f| f.evidence.iter().map(|x| x.source_id.clone()))
+                    .filter(|id| allowed(id))
                     .collect();
                 EntityStat {
                     id: e.id.clone(),
                     name: e.name.clone(),
                     kind: e.kind.clone(),
-                    aliases: s.entity_with_aliases(e).aliases.into_iter().collect(),
+                    aliases: s.aliases_of(e, filter).into_iter().collect(),
                     facts: about.len() as i64,
                     sources: srcs.into_iter().collect(),
                 }
             })
+            .filter(|e| filter.is_none() || e.facts > 0)
             .collect();
         Ok(IndexInputs {
             generation,
             sources,
             entities,
         })
+    }
+
+    async fn sources_in_collections(
+        &self,
+        corpus: &str,
+        partitions: &[String],
+        collections: &[String],
+    ) -> Result<Vec<String>> {
+        Ok(self
+            .lock()
+            .sources
+            .values()
+            .filter(|x| {
+                x.corpus == corpus
+                    && partitions.contains(&x.partition)
+                    && collections.contains(&x.collection)
+            })
+            .map(|x| x.id.clone())
+            .collect())
     }
 
     async fn cached_index(&self, corpus: &str, partition: &str) -> Result<Option<(i64, String)>> {
@@ -641,99 +845,7 @@ impl Ledger for MemoryLedger {
         source_id: &str,
         now: Time,
     ) -> Result<Option<PurgeReport>> {
-        let mut s = self.lock();
-        let Some(src) = s.sources.remove(&key(corpus, source_id)) else {
-            return Ok(None);
-        };
-        let mut report = PurgeReport {
-            partition: src.partition.clone(),
-            ..Default::default()
-        };
-        let episode_ids: BTreeSet<String> = s
-            .episodes
-            .values()
-            .filter(|e| e.corpus == corpus && e.source_id == source_id)
-            .map(|e| e.id.clone())
-            .collect();
-        for id in &episode_ids {
-            s.episodes.remove(&key(corpus, id));
-        }
-        report.episodes = episode_ids.len() as i64;
-        let chunk_ids: Vec<String> = s
-            .chunks
-            .values()
-            .filter(|c| c.corpus == corpus && c.source_id == source_id)
-            .map(|c| c.id.clone())
-            .collect();
-        for id in &chunk_ids {
-            s.chunks.remove(&key(corpus, id));
-        }
-        report.chunks = chunk_ids.len() as i64;
-        report.point_ids.extend(chunk_ids.iter().cloned());
-
-        let mut dead = BTreeSet::new();
-        for f in s.facts.values_mut().filter(|f| f.corpus == corpus) {
-            let before = f.evidence.len();
-            f.evidence.retain(|e| e.source_id != source_id);
-            if f.evidence.len() != before {
-                if f.evidence.is_empty() {
-                    dead.insert(f.id.clone());
-                } else {
-                    report.facts_kept += 1;
-                }
-            }
-        }
-        for id in &dead {
-            s.facts.remove(&key(corpus, id));
-        }
-        report.facts_deleted = dead.len() as i64;
-        report.point_ids.extend(dead.iter().cloned());
-        for f in s.facts.values_mut().filter(|f| f.corpus == corpus) {
-            splice_versions(f, &dead);
-        }
-
-        for (_, m) in s.aliases.iter_mut().filter(|((c, _), _)| c == corpus) {
-            for srcs in m.values_mut() {
-                srcs.remove(source_id);
-            }
-            m.retain(|_, srcs| !srcs.is_empty());
-        }
-        let referenced: BTreeSet<String> = s
-            .facts
-            .values()
-            .filter(|f| f.corpus == corpus)
-            .flat_map(|f| std::iter::once(f.subject.clone()).chain(f.object_entity.clone()))
-            .collect();
-        let orphans: Vec<Key> = s
-            .entities
-            .iter()
-            .filter(|((c, id), _)| c == corpus && !referenced.contains(id))
-            .map(|(k, _)| k.clone())
-            .collect();
-        for k in orphans {
-            s.entities.remove(&k);
-            s.aliases.remove(&k);
-        }
-        let chunk_set: BTreeSet<&String> = chunk_ids.iter().collect();
-        s.jobs.retain(|j| {
-            j.corpus != corpus
-                || matches!(j.state, JobState::Succeeded | JobState::Failed)
-                || !(episode_ids.contains(&j.target) || chunk_set.contains(&j.target))
-        });
-        s.bump(corpus, &src.partition);
-        s.index_cache.remove(&key(corpus, &src.partition));
-        let seq = s.journal.len() as i64 + 1;
-        s.journal.push(ErasureEntry {
-            seq,
-            corpus_digest: digest_hex(&[corpus]),
-            target_kind: "source".into(),
-            target_digest: digest_hex(&[corpus, source_id]),
-            erased_at: now,
-            episodes: report.episodes,
-            chunks: report.chunks,
-            facts: report.facts_deleted,
-        });
-        Ok(Some(report))
+        Ok(self.lock().purge(corpus, source_id, now))
     }
 
     async fn erasure_journal(&self) -> Result<Vec<ErasureEntry>> {

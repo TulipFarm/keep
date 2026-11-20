@@ -16,8 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::NaiveDate;
-use keep_knowledge::engine::{EpisodeInput, ExternalClaim, SourceInput};
-use keep_knowledge::extract::Claim;
+use keep_knowledge::engine::{EpisodeInput, SourceInput};
 use keep_knowledge::model::{FactStatus, TimeBasis};
 use keep_knowledge::session_extract::{
     ExtractionCache, FactKind, SessionExtractor, SessionInput, SessionTurn,
@@ -26,6 +25,8 @@ use keep_knowledge::session_summary::SessionSummarizer;
 use keep_knowledge::{Knowledge, ManualClock, SourceKind};
 use keep_providers::{ChatModel, ProviderError, Tokenizer, timing};
 use serde::{Deserialize, Serialize};
+
+pub use keep_knowledge::session_extract::claims_for;
 
 use crate::dataset::{History, Session};
 use crate::manifest::ModelSpec;
@@ -343,36 +344,6 @@ pub async fn warm_cache<P: SessionPass>(
     stats
 }
 
-/// The claims one session's facts become. Events carry their date in the
-/// object, so the same kind of event on two dates stays two facts while a
-/// restatement of one event only adds evidence.
-pub fn claims_for(facts: &[keep_knowledge::session_extract::SessionFact]) -> Vec<ExternalClaim> {
-    facts
-        .iter()
-        .map(|f| {
-            let object = match (f.kind, f.valid_from) {
-                (FactKind::Event, Some(t)) => format!("{} @ {}", f.value, t.date_naive()),
-                _ => f.value.clone(),
-            };
-            ExternalClaim {
-                claim: Claim {
-                    subject: f.subject.clone(),
-                    subject_kind: "person".into(),
-                    predicate: f.attribute.clone(),
-                    object,
-                    object_kind: None,
-                    valid_from: f.valid_from,
-                    basis: f.basis,
-                    quote: String::new(),
-                },
-                text: Some(f.statement.clone()),
-                single_valued: f.kind == FactKind::State,
-                episodes: f.turns.clone(),
-            }
-        })
-        .collect()
-}
-
 /// What building one facts corpus found.
 #[derive(Clone, Debug, Default)]
 pub struct IngestedFacts {
@@ -453,6 +424,7 @@ pub async fn ingest_facts(
                     s.id,
                     s.date_raw.as_deref().unwrap_or("date unknown")
                 ),
+                metadata: Default::default(),
                 kind: SourceKind::Conversation,
             },
             episodes,

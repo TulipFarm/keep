@@ -14,8 +14,8 @@ use tokio_postgres::{Client, GenericClient, Row, Transaction};
 
 use crate::ledger::{
     ApplyOutcome, ChangeSet, EntityStat, IndexInputs, IngestBatch, IngestReport, KnowledgeError,
-    Ledger, MAX_JOB_ATTEMPTS, Projection, PurgeReport, Result, SourceStat, normalize_name,
-    retry_delay,
+    Ledger, MAX_JOB_ATTEMPTS, Projection, PurgeReport, Result, SourceStat, episode_set,
+    normalize_name, retry_delay, same_source,
 };
 use crate::memory_ledger::{LEASE_SECONDS, splice_versions};
 use crate::model::{
@@ -23,10 +23,16 @@ use crate::model::{
     JobKind, JobState, NewJob, Source, SourceKind, Time, TimeBasis, digest_hex,
 };
 
-const MIGRATIONS: &[(&str, &str)] = &[(
-    "knowledge_0001_ledger",
-    include_str!("../migrations/knowledge_0001_ledger.sql"),
-)];
+const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "knowledge_0001_ledger",
+        include_str!("../migrations/knowledge_0001_ledger.sql"),
+    ),
+    (
+        "knowledge_0002_source_metadata",
+        include_str!("../migrations/knowledge_0002_source_metadata.sql"),
+    ),
+];
 
 pub struct PgLedger {
     url: String,
@@ -106,6 +112,7 @@ fn source_row(r: &Row) -> Source {
         title: r.get("title"),
         kind: SourceKind::parse(r.get("kind")),
         created_at: r.get("created_at"),
+        metadata: serde_json::from_value(r.get("metadata")).unwrap_or_default(),
     }
 }
 
@@ -244,7 +251,12 @@ async fn load_facts<C: GenericClient>(c: &C, corpus: &str, ids: &[String]) -> Re
     Ok(ids.iter().filter_map(|id| facts.remove(id)).collect())
 }
 
-async fn load_entity<C: GenericClient>(c: &C, corpus: &str, id: &str) -> Result<Option<Entity>> {
+async fn load_entity<C: GenericClient>(
+    c: &C,
+    corpus: &str,
+    id: &str,
+    sources: Option<&[String]>,
+) -> Result<Option<Entity>> {
     let Some(r) = c
         .query_opt(
             "SELECT * FROM knowledge_entities WHERE corpus = $1 AND id = $2",
@@ -257,8 +269,9 @@ async fn load_entity<C: GenericClient>(c: &C, corpus: &str, id: &str) -> Result<
     };
     let aliases = c
         .query(
-            "SELECT DISTINCT alias FROM knowledge_entity_aliases WHERE corpus = $1 AND entity_id = $2",
-            &[&corpus, &id],
+            "SELECT DISTINCT alias FROM knowledge_entity_aliases
+             WHERE corpus = $1 AND entity_id = $2 AND ($3::text[] IS NULL OR source_id = ANY($3))",
+            &[&corpus, &id, &sources],
         )
         .await
         .map_err(db)?
@@ -391,44 +404,60 @@ impl Ledger for PgLedger {
         let src = &batch.source;
         let corpus = src.corpus.as_str();
         let mut report = IngestReport::default();
-        match tx
+        let mut old = tx
             .query_opt(
                 "SELECT * FROM knowledge_sources WHERE corpus = $1 AND id = $2 FOR UPDATE",
                 &[&corpus, &src.id],
             )
             .await
             .map_err(db)?
-        {
-            Some(r) => {
-                let old = source_row(&r);
-                if old.partition != src.partition
-                    || old.collection != src.collection
-                    || old.title != src.title
-                    || old.kind != src.kind
-                {
-                    return Err(KnowledgeError::Conflict(
-                        "source already exists with different metadata".into(),
-                    ));
-                }
+            .map(|r| source_row(&r));
+        if let Some(prev) = &old {
+            let same_meta = same_source(prev, src);
+            let changed = batch.replace
+                && (!same_meta
+                    || {
+                        let held: BTreeSet<(String, String)> = tx
+                    .query(
+                        "SELECT id, content_hash FROM knowledge_episodes WHERE corpus = $1 AND source_id = $2",
+                        &[&corpus, &src.id],
+                    )
+                    .await
+                    .map_err(db)?
+                    .iter()
+                    .map(|r| (r.get(0), r.get(1)))
+                    .collect();
+                        held != episode_set(&batch.episodes)
+                    });
+            if changed {
+                let purged = purge_tx(&tx, corpus, prev, batch.now).await?;
+                report.replaced = true;
+                report.purged = Some(purged);
+                old = None;
+            } else if !same_meta {
+                return Err(KnowledgeError::Conflict(
+                    "source already exists with different metadata".into(),
+                ));
             }
-            None => {
-                tx.execute(
-                    "INSERT INTO knowledge_sources (corpus, id, partition_label, collection, title, kind, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                    &[
-                        &corpus,
-                        &src.id,
-                        &src.partition,
-                        &src.collection,
-                        &src.title,
-                        &src.kind.as_str(),
-                        &src.created_at,
-                    ],
-                )
-                .await
-                .map_err(db)?;
-                report.source_created = true;
-            }
+        }
+        if old.is_none() {
+            tx.execute(
+                "INSERT INTO knowledge_sources (corpus, id, partition_label, collection, title, kind, created_at, metadata)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                &[
+                    &corpus,
+                    &src.id,
+                    &src.partition,
+                    &src.collection,
+                    &src.title,
+                    &src.kind.as_str(),
+                    &src.created_at,
+                    &serde_json::to_value(&src.metadata).map_err(db)?,
+                ],
+            )
+            .await
+            .map_err(db)?;
+            report.source_created = !report.replaced;
         }
         let ids: Vec<String> = batch.episodes.iter().map(|e| e.id.clone()).collect();
         let existing: BTreeMap<String, (String, String)> = tx
@@ -528,7 +557,7 @@ impl Ledger for PgLedger {
             .collect();
         report.jobs_enqueued = jobs.len();
         enqueue_tx(&tx, corpus, &jobs, batch.now).await?;
-        if report.source_created || report.episodes_added > 0 {
+        if report.source_created || report.replaced || report.episodes_added > 0 {
             bump(&tx, corpus, &src.partition).await?;
         }
         tx.commit().await.map_err(db)?;
@@ -555,6 +584,20 @@ impl Ledger for PgLedger {
         .await
         .map_err(db)?
         .map(|r| episode_row(&r)))
+    }
+
+    async fn source_episodes(&self, corpus: &str, source_id: &str) -> Result<Vec<Episode>> {
+        let c = self.client().await?;
+        Ok(c.query(
+            "SELECT * FROM knowledge_episodes WHERE corpus = $1 AND source_id = $2 \
+             ORDER BY ordinal",
+            &[&corpus, &source_id],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(episode_row)
+        .collect())
     }
 
     async fn chunks(&self, corpus: &str, ids: &[String]) -> Result<Vec<Chunk>> {
@@ -593,7 +636,7 @@ impl Ledger for PgLedger {
 
     async fn entity(&self, corpus: &str, id: &str) -> Result<Option<Entity>> {
         let c = self.client().await?;
-        load_entity(&*c, corpus, id).await
+        load_entity(&*c, corpus, id, None).await
     }
 
     async fn find_entity(
@@ -617,7 +660,7 @@ impl Ledger for PgLedger {
             .map_err(db)?
             .map(|r| r.get(0));
         match id {
-            Some(id) => load_entity(&*c, corpus, &id).await,
+            Some(id) => load_entity(&*c, corpus, &id, None).await,
             None => Ok(None),
         }
     }
@@ -627,6 +670,7 @@ impl Ledger for PgLedger {
         corpus: &str,
         partitions: &[String],
         normalized: &str,
+        sources: Option<&[String]>,
     ) -> Result<Vec<Entity>> {
         let c = self.client().await?;
         let ids: Vec<String> = c
@@ -635,9 +679,10 @@ impl Ledger for PgLedger {
                  WHERE en.corpus = $1 AND en.partition_label = ANY($2)
                    AND (en.norm_name = $3 OR EXISTS (
                      SELECT 1 FROM knowledge_entity_aliases a
-                     WHERE a.corpus = en.corpus AND a.entity_id = en.id AND a.norm_alias = $3))
+                     WHERE a.corpus = en.corpus AND a.entity_id = en.id AND a.norm_alias = $3
+                       AND ($4::text[] IS NULL OR a.source_id = ANY($4))))
                  ORDER BY en.id",
-                &[&corpus, &partitions, &normalized],
+                &[&corpus, &partitions, &normalized, &sources],
             )
             .await
             .map_err(db)?
@@ -646,11 +691,30 @@ impl Ledger for PgLedger {
             .collect();
         let mut out = Vec::new();
         for id in ids {
-            if let Some(e) = load_entity(&*c, corpus, &id).await? {
+            if let Some(e) = load_entity(&*c, corpus, &id, sources).await? {
                 out.push(e);
             }
         }
         Ok(out)
+    }
+
+    async fn aliases_from(
+        &self,
+        corpus: &str,
+        entity_id: &str,
+        sources: &[String],
+    ) -> Result<BTreeSet<String>> {
+        let c = self.client().await?;
+        Ok(c.query(
+            "SELECT DISTINCT alias FROM knowledge_entity_aliases
+             WHERE corpus = $1 AND entity_id = $2 AND source_id = ANY($3)",
+            &[&corpus, &entity_id, &sources],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect())
     }
 
     async fn current_facts(
@@ -684,6 +748,7 @@ impl Ledger for PgLedger {
         partitions: &[String],
         entity_id: &str,
         limit: usize,
+        sources: Option<&[String]>,
     ) -> Result<Vec<Fact>> {
         let c = self.client().await?;
         let ids: Vec<String> = c
@@ -691,12 +756,13 @@ impl Ledger for PgLedger {
                 "SELECT f.id FROM knowledge_facts f
                  WHERE f.corpus = $1 AND f.partition_label = ANY($2)
                    AND (f.subject = $3 OR f.object_entity = $3)
+                   AND ($5::text[] IS NULL OR EXISTS (SELECT 1 FROM knowledge_evidence ev WHERE ev.corpus = f.corpus AND ev.fact_id = f.id AND ev.source_id = ANY($5)))
                  ORDER BY GREATEST(
                    (SELECT max(recorded_at) FROM knowledge_fact_versions v WHERE v.corpus = f.corpus AND v.fact_id = f.id),
                    (SELECT max(recorded_at) FROM knowledge_evidence e WHERE e.corpus = f.corpus AND e.fact_id = f.id)
                  ) DESC NULLS LAST, f.id
                  LIMIT $4",
-                &[&corpus, &partitions, &entity_id, &(limit as i64)],
+                &[&corpus, &partitions, &entity_id, &(limit as i64), &sources],
             )
             .await
             .map_err(db)?
@@ -710,16 +776,27 @@ impl Ledger for PgLedger {
         let mut c = self.client().await?;
         let tx = c.transaction().await.map_err(db)?;
         let corpus = cs.corpus.as_str();
-        // Holding a share lock on the episode makes a concurrent purge wait
-        // for this transaction, then delete what it wrote.
-        if tx
-            .query_opt(
-                "SELECT 1 FROM knowledge_episodes WHERE corpus = $1 AND id = $2 FOR SHARE",
-                &[&corpus, &cs.episode_id],
+        // Holding a share lock on the cited episodes makes a concurrent
+        // purge or replacement wait for this transaction, then delete what
+        // it wrote. Content hashes catch a replacement that already ran.
+        let mut ids: Vec<&str> = vec![cs.episode_id.as_str()];
+        ids.extend(cs.episodes.iter().map(|(id, _)| id.as_str()));
+        let found: BTreeMap<String, String> = tx
+            .query(
+                "SELECT id, content_hash FROM knowledge_episodes
+                 WHERE corpus = $1 AND id = ANY($2) ORDER BY id FOR SHARE",
+                &[&corpus, &ids],
             )
             .await
             .map_err(db)?
-            .is_none()
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        if !found.contains_key(&cs.episode_id)
+            || !cs
+                .episodes
+                .iter()
+                .all(|(id, hash)| found.get(id) == Some(hash))
         {
             return Ok(ApplyOutcome::EpisodeGone);
         }
@@ -821,6 +898,7 @@ impl Ledger for PgLedger {
         partitions: &[String],
         query: &str,
         limit: usize,
+        sources: Option<&[String]>,
     ) -> Result<Vec<ScoredId>> {
         let q = tsquery(query);
         if q.is_empty() {
@@ -834,16 +912,18 @@ impl Ledger for PgLedger {
                    SELECT ch.id, ts_rank_cd(ch.tsv, q.q)::real AS score
                    FROM knowledge_chunks ch, q
                    WHERE ch.corpus = $1 AND ch.partition_label = ANY($2) AND ch.tsv @@ q.q
+                     AND ($5::text[] IS NULL OR ch.source_id = ANY($5))
                    UNION ALL
                    SELECT f.id, ts_rank_cd(f.tsv, q.q)::real AS score
                    FROM knowledge_facts f, q
                    WHERE f.corpus = $1 AND f.partition_label = ANY($2) AND f.tsv @@ q.q
                      AND EXISTS (SELECT 1 FROM knowledge_fact_versions v
                                  WHERE v.corpus = f.corpus AND v.fact_id = f.id AND v.invalidated_at IS NULL)
+                     AND ($5::text[] IS NULL OR EXISTS (SELECT 1 FROM knowledge_evidence ev WHERE ev.corpus = f.corpus AND ev.fact_id = f.id AND ev.source_id = ANY($5)))
                  ) hits
                  ORDER BY score DESC, id
                  LIMIT $4",
-                &[&corpus, &partitions, &q, &(limit as i64)],
+                &[&corpus, &partitions, &q, &(limit as i64), &sources],
             )
             .await
             .map_err(db)?;
@@ -864,9 +944,9 @@ impl Ledger for PgLedger {
         let c = self.client().await?;
         let row = c
             .query_opt(
-                "SELECT partition_label, text FROM knowledge_chunks WHERE corpus = $1 AND id = $2
+                "SELECT partition_label, text, ARRAY[source_id] FROM knowledge_chunks WHERE corpus = $1 AND id = $2
                  UNION ALL
-                 SELECT partition_label, text FROM knowledge_facts WHERE corpus = $1 AND id = $2
+                 SELECT partition_label, text, COALESCE((SELECT array_agg(DISTINCT ev.source_id ORDER BY ev.source_id) FROM knowledge_evidence ev WHERE ev.corpus = f.corpus AND ev.fact_id = f.id), '{}'::text[]) FROM knowledge_facts f WHERE corpus = $1 AND id = $2
                  LIMIT 1",
                 &[&corpus, &point_id],
             )
@@ -875,6 +955,7 @@ impl Ledger for PgLedger {
         Ok(row.map(|r| Projection {
             partition: r.get(0),
             text: r.get(1),
+            sources: r.get(2),
         }))
     }
 
@@ -887,9 +968,9 @@ impl Ledger for PgLedger {
         let mut found: BTreeMap<String, Projection> = BTreeMap::new();
         for r in c
             .query(
-                "SELECT id, partition_label, text, 0 AS pick FROM knowledge_chunks WHERE corpus = $1 AND id = ANY($2)
+                "SELECT id, partition_label, text, 0 AS pick, ARRAY[source_id] FROM knowledge_chunks WHERE corpus = $1 AND id = ANY($2)
                  UNION ALL
-                 SELECT id, partition_label, text, 1 AS pick FROM knowledge_facts WHERE corpus = $1 AND id = ANY($2)
+                 SELECT id, partition_label, text, 1 AS pick, COALESCE((SELECT array_agg(DISTINCT ev.source_id ORDER BY ev.source_id) FROM knowledge_evidence ev WHERE ev.corpus = f.corpus AND ev.fact_id = f.id), '{}'::text[]) FROM knowledge_facts f WHERE corpus = $1 AND id = ANY($2)
                  ORDER BY pick DESC",
                 &[&corpus, &ids],
             )
@@ -901,6 +982,7 @@ impl Ledger for PgLedger {
                 Projection {
                     partition: r.get(1),
                     text: r.get(2),
+                    sources: r.get(4),
                 },
             );
         }
@@ -1096,7 +1178,12 @@ impl Ledger for PgLedger {
         .collect())
     }
 
-    async fn index_inputs(&self, corpus: &str, partition: &str) -> Result<IndexInputs> {
+    async fn index_inputs(
+        &self,
+        corpus: &str,
+        partition: &str,
+        sources: Option<&[String]>,
+    ) -> Result<IndexInputs> {
         let mut c = self.client().await?;
         let tx = c
             .build_transaction()
@@ -1113,6 +1200,7 @@ impl Ledger for PgLedger {
             .await
             .map_err(db)?
             .map_or(0, |r| r.get(0));
+        let filter = sources;
         let sources = tx
             .query(
                 "SELECT s.id, s.title, s.collection,
@@ -1120,8 +1208,9 @@ impl Ledger for PgLedger {
                    (SELECT count(DISTINCT v.fact_id) FROM knowledge_evidence v WHERE v.corpus = s.corpus AND v.source_id = s.id),
                    (SELECT min(e.occurred_at) FROM knowledge_episodes e WHERE e.corpus = s.corpus AND e.source_id = s.id),
                    (SELECT max(e.occurred_at) FROM knowledge_episodes e WHERE e.corpus = s.corpus AND e.source_id = s.id)
-                 FROM knowledge_sources s WHERE s.corpus = $1 AND s.partition_label = $2",
-                &[&corpus, &partition],
+                 FROM knowledge_sources s WHERE s.corpus = $1 AND s.partition_label = $2
+                   AND ($3::text[] IS NULL OR s.id = ANY($3))",
+                &[&corpus, &partition, &filter],
             )
             .await
             .map_err(db)?
@@ -1140,16 +1229,19 @@ impl Ledger for PgLedger {
             .query(
                 "SELECT en.id, en.name, en.kind,
                    COALESCE((SELECT array_agg(DISTINCT a.alias) FROM knowledge_entity_aliases a
-                             WHERE a.corpus = en.corpus AND a.entity_id = en.id), '{}'::text[]),
+                             WHERE a.corpus = en.corpus AND a.entity_id = en.id
+                               AND ($3::text[] IS NULL OR a.source_id = ANY($3))), '{}'::text[]),
                    (SELECT count(*) FROM knowledge_facts f
                     WHERE f.corpus = en.corpus AND f.partition_label = en.partition_label
-                      AND (f.subject = en.id OR f.object_entity = en.id)),
+                      AND (f.subject = en.id OR f.object_entity = en.id)
+                      AND ($3::text[] IS NULL OR EXISTS (SELECT 1 FROM knowledge_evidence ev WHERE ev.corpus = f.corpus AND ev.fact_id = f.id AND ev.source_id = ANY($3)))),
                    COALESCE((SELECT array_agg(DISTINCT v.source_id) FROM knowledge_evidence v
                              JOIN knowledge_facts f ON f.corpus = v.corpus AND f.id = v.fact_id
                              WHERE f.corpus = en.corpus AND f.partition_label = en.partition_label
-                               AND (f.subject = en.id OR f.object_entity = en.id)), '{}'::text[])
+                               AND (f.subject = en.id OR f.object_entity = en.id)
+                               AND ($3::text[] IS NULL OR v.source_id = ANY($3))), '{}'::text[])
                  FROM knowledge_entities en WHERE en.corpus = $1 AND en.partition_label = $2",
-                &[&corpus, &partition],
+                &[&corpus, &partition, &filter],
             )
             .await
             .map_err(db)?
@@ -1162,6 +1254,7 @@ impl Ledger for PgLedger {
                 facts: r.get(4),
                 sources: r.get(5),
             })
+            .filter(|e: &EntityStat| filter.is_none() || e.facts > 0)
             .collect();
         tx.commit().await.map_err(db)?;
         Ok(IndexInputs {
@@ -1169,6 +1262,26 @@ impl Ledger for PgLedger {
             sources,
             entities,
         })
+    }
+
+    async fn sources_in_collections(
+        &self,
+        corpus: &str,
+        partitions: &[String],
+        collections: &[String],
+    ) -> Result<Vec<String>> {
+        let c = self.client().await?;
+        Ok(c.query(
+            "SELECT id FROM knowledge_sources
+             WHERE corpus = $1 AND partition_label = ANY($2) AND collection = ANY($3)
+             ORDER BY id",
+            &[&corpus, &partitions, &collections],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect())
     }
 
     async fn cached_index(&self, corpus: &str, partition: &str) -> Result<Option<(i64, String)>> {
@@ -1224,140 +1337,7 @@ impl Ledger for PgLedger {
         else {
             return Ok(None);
         };
-        let mut report = PurgeReport {
-            partition: src.partition.clone(),
-            ..Default::default()
-        };
-        let episode_ids: Vec<String> = tx
-            .query(
-                "SELECT id FROM knowledge_episodes WHERE corpus = $1 AND source_id = $2",
-                &[&corpus, &source_id],
-            )
-            .await
-            .map_err(db)?
-            .iter()
-            .map(|r| r.get(0))
-            .collect();
-        let chunk_ids: Vec<String> = tx
-            .query(
-                "SELECT id FROM knowledge_chunks WHERE corpus = $1 AND source_id = $2 ORDER BY id",
-                &[&corpus, &source_id],
-            )
-            .await
-            .map_err(db)?
-            .iter()
-            .map(|r| r.get(0))
-            .collect();
-        let touched: Vec<String> = tx
-            .query(
-                "SELECT DISTINCT fact_id FROM knowledge_evidence WHERE corpus = $1 AND source_id = $2",
-                &[&corpus, &source_id],
-            )
-            .await
-            .map_err(db)?
-            .iter()
-            .map(|r| r.get(0))
-            .collect();
-        // Cascades to episodes, chunks and their evidence.
-        tx.execute(
-            "DELETE FROM knowledge_sources WHERE corpus = $1 AND id = $2",
-            &[&corpus, &source_id],
-        )
-        .await
-        .map_err(db)?;
-        tx.execute(
-            "DELETE FROM knowledge_evidence WHERE corpus = $1 AND source_id = $2",
-            &[&corpus, &source_id],
-        )
-        .await
-        .map_err(db)?;
-        let dead: BTreeSet<String> = tx
-            .query(
-                "DELETE FROM knowledge_facts f WHERE f.corpus = $1 AND f.id = ANY($2)
-                   AND NOT EXISTS (SELECT 1 FROM knowledge_evidence e
-                                   WHERE e.corpus = f.corpus AND e.fact_id = f.id)
-                 RETURNING f.id",
-                &[&corpus, &touched],
-            )
-            .await
-            .map_err(db)?
-            .iter()
-            .map(|r| r.get(0))
-            .collect();
-        report.episodes = episode_ids.len() as i64;
-        report.chunks = chunk_ids.len() as i64;
-        report.facts_deleted = dead.len() as i64;
-        report.facts_kept = (touched.len() - dead.len()) as i64;
-        report.point_ids.extend(chunk_ids.iter().cloned());
-        report.point_ids.extend(dead.iter().cloned());
-
-        let dead_vec: Vec<String> = dead.iter().cloned().collect();
-        let affected: Vec<String> = tx
-            .query(
-                "SELECT DISTINCT fact_id FROM knowledge_fact_versions WHERE corpus = $1 AND cause = ANY($2)",
-                &[&corpus, &dead_vec],
-            )
-            .await
-            .map_err(db)?
-            .iter()
-            .map(|r| r.get(0))
-            .collect();
-        for mut f in load_facts(&tx, corpus, &affected).await? {
-            splice_versions(&mut f, &dead);
-            tx.execute(
-                "DELETE FROM knowledge_fact_versions WHERE corpus = $1 AND fact_id = $2",
-                &[&corpus, &f.id],
-            )
-            .await
-            .map_err(db)?;
-            for v in &f.versions {
-                insert_version(&tx, corpus, &f.id, v).await?;
-            }
-        }
-        tx.execute(
-            "DELETE FROM knowledge_entity_aliases WHERE corpus = $1 AND source_id = $2",
-            &[&corpus, &source_id],
-        )
-        .await
-        .map_err(db)?;
-        tx.execute(
-            "DELETE FROM knowledge_entities en WHERE en.corpus = $1 AND NOT EXISTS (
-               SELECT 1 FROM knowledge_facts f
-               WHERE f.corpus = en.corpus AND (f.subject = en.id OR f.object_entity = en.id))",
-            &[&corpus],
-        )
-        .await
-        .map_err(db)?;
-        let targets: Vec<String> = episode_ids.iter().chain(&chunk_ids).cloned().collect();
-        tx.execute(
-            "DELETE FROM knowledge_jobs WHERE corpus = $1 AND target = ANY($2)
-               AND state NOT IN ('succeeded', 'failed')",
-            &[&corpus, &targets],
-        )
-        .await
-        .map_err(db)?;
-        bump(&tx, corpus, &src.partition).await?;
-        tx.execute(
-            "DELETE FROM knowledge_index_cache WHERE corpus = $1 AND partition_label = $2",
-            &[&corpus, &src.partition],
-        )
-        .await
-        .map_err(db)?;
-        tx.execute(
-            "INSERT INTO knowledge_erasure_journal
-             (corpus_digest, target_kind, target_digest, erased_at, episodes, chunks, facts)
-             VALUES ($1, 'source', $2, $3, $4, $5, $6)",
-            &[
-                &digest_hex(&[corpus]),
-                &digest_hex(&[corpus, source_id]),
-                &now,
-                &report.episodes,
-                &report.chunks,
-                &report.facts_deleted,
-            ],
-        )
-        .await
-        .map_err(db)?;
+        let report = purge_tx(&tx, corpus, &src, now).await?;
         tx.commit().await.map_err(db)?;
         Ok(Some(report))
     }
@@ -1416,4 +1396,153 @@ impl Ledger for PgLedger {
         tx.commit().await.map_err(db)?;
         Ok(parts)
     }
+}
+
+/// Delete a source and everything derived only from it, inside `tx`.
+async fn purge_tx(
+    tx: &Transaction<'_>,
+    corpus: &str,
+    src: &Source,
+    now: Time,
+) -> Result<PurgeReport> {
+    let mut report = PurgeReport {
+        partition: src.partition.clone(),
+        ..Default::default()
+    };
+    let episode_ids: Vec<String> = tx
+        .query(
+            "SELECT id FROM knowledge_episodes WHERE corpus = $1 AND source_id = $2",
+            &[&corpus, &src.id],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    let chunk_ids: Vec<String> = tx
+        .query(
+            "SELECT id FROM knowledge_chunks WHERE corpus = $1 AND source_id = $2 ORDER BY id",
+            &[&corpus, &src.id],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    let touched: Vec<String> = tx
+        .query(
+            "SELECT DISTINCT fact_id FROM knowledge_evidence WHERE corpus = $1 AND source_id = $2",
+            &[&corpus, &src.id],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    // Cascades to episodes, chunks and their evidence.
+    tx.execute(
+        "DELETE FROM knowledge_sources WHERE corpus = $1 AND id = $2",
+        &[&corpus, &src.id],
+    )
+    .await
+    .map_err(db)?;
+    tx.execute(
+        "DELETE FROM knowledge_evidence WHERE corpus = $1 AND source_id = $2",
+        &[&corpus, &src.id],
+    )
+    .await
+    .map_err(db)?;
+    let dead: BTreeSet<String> = tx
+        .query(
+            "DELETE FROM knowledge_facts f WHERE f.corpus = $1 AND f.id = ANY($2)
+               AND NOT EXISTS (SELECT 1 FROM knowledge_evidence e
+                               WHERE e.corpus = f.corpus AND e.fact_id = f.id)
+             RETURNING f.id",
+            &[&corpus, &touched],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    report.episodes = episode_ids.len() as i64;
+    report.chunks = chunk_ids.len() as i64;
+    report.facts_deleted = dead.len() as i64;
+    report.facts_kept = (touched.len() - dead.len()) as i64;
+    report.kept_fact_ids = touched
+        .iter()
+        .filter(|id| !dead.contains(*id))
+        .cloned()
+        .collect();
+    report.point_ids.extend(chunk_ids.iter().cloned());
+    report.point_ids.extend(dead.iter().cloned());
+
+    let dead_vec: Vec<String> = dead.iter().cloned().collect();
+    let affected: Vec<String> = tx
+        .query(
+            "SELECT DISTINCT fact_id FROM knowledge_fact_versions WHERE corpus = $1 AND cause = ANY($2)",
+            &[&corpus, &dead_vec],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    for mut f in load_facts(tx, corpus, &affected).await? {
+        splice_versions(&mut f, &dead);
+        tx.execute(
+            "DELETE FROM knowledge_fact_versions WHERE corpus = $1 AND fact_id = $2",
+            &[&corpus, &f.id],
+        )
+        .await
+        .map_err(db)?;
+        for v in &f.versions {
+            insert_version(tx, corpus, &f.id, v).await?;
+        }
+    }
+    tx.execute(
+        "DELETE FROM knowledge_entity_aliases WHERE corpus = $1 AND source_id = $2",
+        &[&corpus, &src.id],
+    )
+    .await
+    .map_err(db)?;
+    tx.execute(
+        "DELETE FROM knowledge_entities en WHERE en.corpus = $1 AND NOT EXISTS (
+           SELECT 1 FROM knowledge_facts f
+           WHERE f.corpus = en.corpus AND (f.subject = en.id OR f.object_entity = en.id))",
+        &[&corpus],
+    )
+    .await
+    .map_err(db)?;
+    let targets: Vec<String> = episode_ids.iter().chain(&chunk_ids).cloned().collect();
+    tx.execute(
+        "DELETE FROM knowledge_jobs WHERE corpus = $1 AND target = ANY($2)
+           AND state NOT IN ('succeeded', 'failed')",
+        &[&corpus, &targets],
+    )
+    .await
+    .map_err(db)?;
+    bump(tx, corpus, &src.partition).await?;
+    tx.execute(
+        "DELETE FROM knowledge_index_cache WHERE corpus = $1 AND partition_label = $2",
+        &[&corpus, &src.partition],
+    )
+    .await
+    .map_err(db)?;
+    tx.execute(
+        "INSERT INTO knowledge_erasure_journal
+         (corpus_digest, target_kind, target_digest, erased_at, episodes, chunks, facts)
+         VALUES ($1, 'source', $2, $3, $4, $5, $6)",
+        &[
+            &digest_hex(&[corpus]),
+            &digest_hex(&[corpus, &src.id]),
+            &now,
+            &report.episodes,
+            &report.chunks,
+            &report.facts_deleted,
+        ],
+    )
+    .await
+    .map_err(db)?;
+    Ok(report)
 }

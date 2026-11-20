@@ -21,6 +21,8 @@ pub struct QdrantIndex {
     /// Vector sizes of collections seen to exist, so upserts and searches
     /// skip a lookup per call. Forgotten when a request on it fails.
     known_dims: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+    /// Collections whose payload indexes this process has ensured.
+    indexed: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 fn backend(e: impl std::fmt::Display) -> StoreError {
@@ -47,6 +49,14 @@ pub fn point_id(namespace: &str, id: &str) -> String {
 
 fn namespace_filter(namespace: &str) -> Value {
     json!({"must": [{"key": "ns", "match": {"value": namespace}}]})
+}
+
+/// Points in `namespace` carrying at least one of `tags`.
+fn tagged_filter(namespace: &str, tags: &[String]) -> Value {
+    json!({"must": [
+        {"key": "ns", "match": {"value": namespace}},
+        {"key": "tags", "match": {"any": tags}},
+    ]})
 }
 
 impl QdrantIndex {
@@ -82,6 +92,7 @@ impl QdrantIndex {
             api_key,
             client: builder.build().map_err(backend)?,
             known_dims: Default::default(),
+            indexed: Default::default(),
         })
     }
 
@@ -172,8 +183,55 @@ impl QdrantIndex {
         self.known_dims.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    fn indexed_lock(&self) -> std::sync::MutexGuard<'_, std::collections::HashSet<String>> {
+        self.indexed.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn forget(&self, collection: &str) {
         self.known().remove(collection);
+        self.indexed_lock().remove(collection);
+    }
+
+    /// Exact nearest neighbours among the points matching `filter`.
+    async fn query(
+        &self,
+        collection: &str,
+        query: &[f32],
+        k: usize,
+        filter: Value,
+    ) -> Result<Vec<ScoredId>, StoreError> {
+        check_name(collection)?;
+        self.require_dims(collection, query.len()).await?;
+        let value = self
+            .ok(
+                reqwest::Method::POST,
+                &format!("/collections/{collection}/points/query"),
+                Some(json!({
+                    "query": query,
+                    "filter": filter,
+                    "limit": k,
+                    "with_payload": ["key"],
+                    "params": {"exact": true},
+                })),
+            )
+            .await
+            .inspect_err(|_| self.forget(collection))?;
+        let points = value["result"]["points"]
+            .as_array()
+            .ok_or_else(|| backend("query response has no result.points"))?;
+        let hits = points
+            .iter()
+            .map(|p| {
+                Ok(ScoredId {
+                    id: p["payload"]["key"]
+                        .as_str()
+                        .ok_or_else(|| backend("point payload has no key"))?
+                        .to_owned(),
+                    score: p["score"].as_f64().unwrap_or(0.0) as f32,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        Ok(keep_store::rank(hits, k))
     }
 
     async fn require_dims(&self, collection: &str, got: usize) -> Result<(), StoreError> {
@@ -226,28 +284,37 @@ impl VectorIndex for QdrantIndex {
         dimensions: usize,
     ) -> Result<(), StoreError> {
         check_name(collection)?;
-        if let Some(existing) = self.collection_dims(collection).await? {
-            return if existing == dimensions {
-                Ok(())
-            } else {
-                Err(StoreError::DimensionMismatch {
+        match self.collection_dims(collection).await? {
+            Some(existing) if existing != dimensions => {
+                return Err(StoreError::DimensionMismatch {
                     expected: existing,
                     got: dimensions,
-                })
-            };
+                });
+            }
+            Some(_) => {}
+            None => {
+                self.ok(
+                    reqwest::Method::PUT,
+                    &format!("/collections/{collection}"),
+                    Some(json!({"vectors": {"size": dimensions, "distance": "Cosine"}})),
+                )
+                .await?;
+            }
         }
-        self.ok(
-            reqwest::Method::PUT,
-            &format!("/collections/{collection}"),
-            Some(json!({"vectors": {"size": dimensions, "distance": "Cosine"}})),
-        )
-        .await?;
-        self.ok(
-            reqwest::Method::PUT,
-            &format!("/collections/{collection}/index?wait=true"),
-            Some(json!({"field_name": "ns", "field_schema": "keyword"})),
-        )
-        .await?;
+        if self.indexed_lock().contains(collection) {
+            return Ok(());
+        }
+        // Creating an existing payload index is a no-op, so collections made
+        // before tags existed gain the index too.
+        for field in ["ns", "tags"] {
+            self.ok(
+                reqwest::Method::PUT,
+                &format!("/collections/{collection}/index?wait=true"),
+                Some(json!({"field_name": field, "field_schema": "keyword"})),
+            )
+            .await?;
+        }
+        self.indexed_lock().insert(collection.to_owned());
         Ok(())
     }
 
@@ -275,7 +342,7 @@ impl VectorIndex for QdrantIndex {
                     json!({
                         "id": point_id(namespace, &p.id),
                         "vector": p.vector,
-                        "payload": {"ns": namespace, "key": p.id},
+                        "payload": {"ns": namespace, "key": p.id, "tags": p.tags},
                     })
                 })
                 .collect();
@@ -297,38 +364,23 @@ impl VectorIndex for QdrantIndex {
         query: &[f32],
         k: usize,
     ) -> Result<Vec<ScoredId>, StoreError> {
-        check_name(collection)?;
-        self.require_dims(collection, query.len()).await?;
-        let value = self
-            .ok(
-                reqwest::Method::POST,
-                &format!("/collections/{collection}/points/query"),
-                Some(json!({
-                    "query": query,
-                    "filter": namespace_filter(namespace),
-                    "limit": k,
-                    "with_payload": ["key"],
-                    "params": {"exact": true},
-                })),
-            )
+        self.query(collection, query, k, namespace_filter(namespace))
             .await
-            .inspect_err(|_| self.forget(collection))?;
-        let points = value["result"]["points"]
-            .as_array()
-            .ok_or_else(|| backend("query response has no result.points"))?;
-        let hits = points
-            .iter()
-            .map(|p| {
-                Ok(ScoredId {
-                    id: p["payload"]["key"]
-                        .as_str()
-                        .ok_or_else(|| backend("point payload has no key"))?
-                        .to_owned(),
-                    score: p["score"].as_f64().unwrap_or(0.0) as f32,
-                })
-            })
-            .collect::<Result<Vec<_>, StoreError>>()?;
-        Ok(keep_store::rank(hits, k))
+    }
+
+    async fn search_tagged(
+        &self,
+        collection: &str,
+        namespace: &str,
+        query: &[f32],
+        k: usize,
+        tags: &[String],
+    ) -> Result<Vec<ScoredId>, StoreError> {
+        if tags.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.query(collection, query, k, tagged_filter(namespace, tags))
+            .await
     }
 
     async fn delete_namespace(&self, collection: &str, namespace: &str) -> Result<(), StoreError> {

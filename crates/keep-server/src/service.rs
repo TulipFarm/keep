@@ -6,9 +6,12 @@ use std::time::Instant;
 use anyhow::{Context as _, anyhow, bail};
 use chrono::{DateTime, NaiveDate, Utc};
 use keep_knowledge::model::JobCounts;
+use keep_knowledge::session_extract::{SessionExtractor, SessionInput, SessionTurn, text_turns};
+use keep_knowledge::session_summary::SessionSummarizer;
 use keep_knowledge::{
-    AsOf, DEFAULT_EVIDENCE_TOKENS, EpisodeInput, EvidenceAllowance, IndexRequest, Knowledge,
-    KnowledgeConfig, MAX_EVIDENCE_TOKENS, SearchRequest, SourceInput, SourceKind, profile,
+    Access, AsOf, DEFAULT_EVIDENCE_TOKENS, EpisodeInput, EvidenceAllowance, IndexRequest,
+    Knowledge, KnowledgeConfig, MAX_EVIDENCE_TOKENS, SearchRequest, SourceInput, SourceKind,
+    profile,
 };
 use keep_memory::context::{DEFAULT_CONTEXT_TOKENS, LABEL_KNOWLEDGE, MAX_CONTEXT_TOKENS};
 use keep_memory::portable::{InstructionPolicy, export_bundle};
@@ -17,7 +20,7 @@ use keep_memory::{
     ContextBudget, ContextRequest, CreateFile, Edit, ForgetSelector, Head, InMemoryJournal,
     InMemoryLedger, KnowledgeToc, ListQuery, MemoryError, MemoryService, MetadataPatch, OpCtx,
 };
-use keep_providers::{Tokenizer, tokenizer_for};
+use keep_providers::{ProviderError, Tokenizer, tokenizer_for};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -27,6 +30,7 @@ use crate::budget::{BudgetConfig, BudgetPer, EvidenceBudget, Reservation};
 use crate::config::{ServiceArgs, StorageProfile};
 use crate::embedder;
 use crate::error::{ApiError, ErrorCode};
+use crate::model::ModelSetup;
 use crate::scope::{Scope, ScopeArg};
 use crate::settings::{Settings, check_embedder, database_receipt_key, file_receipt_key};
 
@@ -35,6 +39,9 @@ use crate::settings::{Settings, check_embedder, database_receipt_key, file_recei
 const INGEST_JOB_ROUNDS: usize = 50;
 const MAX_LIST_PAGE: usize = 100;
 const DEFAULT_COLLECTION: &str = "general";
+/// Bounds on what one `knowledge_summarize` call reads.
+const MAX_SUMMARIZE_EPISODES: usize = 200;
+const MAX_SUMMARIZE_CHARS: usize = 200_000;
 /// Scopes and job batches the background worker takes per tick.
 const WORKER_CORPORA: usize = 20;
 const WORKER_ROUNDS: usize = 10;
@@ -54,6 +61,8 @@ pub struct ServiceOptions {
     pub log_calls: bool,
     /// Cap on Knowledge evidence per caller over a rolling window.
     pub evidence_budget: Option<BudgetConfig>,
+    /// Chat model for fact extraction and `knowledge_summarize`.
+    pub model: Option<ModelSetup>,
 }
 
 impl ServiceOptions {
@@ -66,6 +75,7 @@ impl ServiceOptions {
             receipt_key: None,
             log_calls: false,
             evidence_budget: None,
+            model: None,
         }
     }
 }
@@ -80,6 +90,8 @@ pub struct KeepService {
     log_calls: bool,
     storage: &'static str,
     budget: Option<EvidenceBudget>,
+    model: Option<ModelSetup>,
+    summarizer: Option<SessionSummarizer>,
 }
 
 impl KeepService {
@@ -93,9 +105,22 @@ impl KeepService {
             Some(k) => memory.with_receipt_key(k),
             None => memory,
         };
+        let mut knowledge = knowledge.with_tokenizer(opts.tokenizer.clone());
+        let mut summarizer = None;
+        if let Some(m) = &opts.model {
+            if m.extraction {
+                let sx =
+                    SessionExtractor::new(Some(m.chat.clone()), m.id.clone(), None, m.reply_tokens);
+                knowledge = knowledge.with_session_extractor(Arc::new(sx), m.concurrency);
+            }
+            summarizer = Some(
+                SessionSummarizer::new(Some(m.chat.clone()), m.id.clone(), None, m.reply_tokens)
+                    .for_documents(),
+            );
+        }
         Self {
             memory,
-            knowledge: knowledge.with_tokenizer(opts.tokenizer.clone()),
+            knowledge,
             tokenizer: opts.tokenizer,
             defaults: opts.defaults,
             agent: opts.agent,
@@ -103,6 +128,8 @@ impl KeepService {
             log_calls: opts.log_calls,
             storage,
             budget: opts.evidence_budget.map(EvidenceBudget::new),
+            model: opts.model,
+            summarizer,
         }
     }
 
@@ -137,6 +164,7 @@ impl KeepService {
                 .map(String::into_bytes),
             log_calls: true,
             evidence_budget: args.evidence_budget()?,
+            model: args.model.build()?,
         };
         let config = KnowledgeConfig {
             collection: args.collection.clone(),
@@ -235,6 +263,7 @@ impl KeepService {
             "tokenizer": self.tokenizer.id(),
             "embeddings": self.knowledge.method(),
             "defaultScope": self.defaults,
+            "model": self.model.as_ref().map(ModelSetup::info),
         })
     }
 
@@ -354,6 +383,7 @@ impl KeepService {
             "knowledge_traverse" => self.knowledge_traverse(parse(args)?).await,
             "knowledge_rebuild_projection" => self.knowledge_rebuild_projection(parse(args)?).await,
             "knowledge_status" => self.knowledge_status(parse(args)?).await,
+            "knowledge_summarize" => self.knowledge_summarize(parse(args)?).await,
             "knowledge_forget_source" => self.knowledge_forget_source(parse(args)?).await,
             _ => Err(unknown_tool(tool)),
         }
@@ -798,8 +828,15 @@ impl KeepService {
             collection: collection.clone(),
             title: req.title.unwrap_or_else(|| source_id.clone()),
             kind,
+            metadata: req.metadata.unwrap_or_default(),
         };
-        let report = self.knowledge.ingest(&corpus, source, episodes).await?;
+        let report = if req.replace {
+            self.knowledge
+                .ingest_revision(&corpus, source, episodes)
+                .await?
+        } else {
+            self.knowledge.ingest(&corpus, source, episodes).await?
+        };
         // The text is committed. Enrichment that fails from here on leaves it
         // captured; the response says so instead of reporting an error.
         let jobs = self.knowledge.run_jobs(&corpus, INGEST_JOB_ROUNDS).await;
@@ -813,6 +850,7 @@ impl KeepService {
             "partition": partition,
             "collection": collection,
             "captured": true,
+            "replaced": report.replaced,
             "report": report,
             "jobs": jobs.ok(),
             "enrichment": enrichment,
@@ -829,6 +867,121 @@ impl KeepService {
             "scope": scope.label(),
             "enrichment": enrichment_of(&counts),
         }))
+    }
+
+    pub async fn knowledge_summarize(&self, req: KnowledgeSummarizeReq) -> Result<Value, ApiError> {
+        let scope = self.scope(req.scope.as_ref())?;
+        let access = read_access(&scope, req.source_ids, req.collections)?;
+        let session = match (req.source_id, req.text, req.episodes) {
+            (Some(id), None, None) => self.source_session(&scope, &access, &id).await?,
+            (None, Some(text), None) => SessionInput {
+                id: "text".into(),
+                date: None,
+                turns: text_turns("text", "", &text),
+            },
+            (None, None, Some(eps)) if !eps.is_empty() => {
+                if eps.len() > MAX_SUMMARIZE_EPISODES {
+                    return Err(ApiError::invalid(format!(
+                        "episodes lists more than {MAX_SUMMARIZE_EPISODES} turns"
+                    )));
+                }
+                let mut turns = Vec::with_capacity(eps.len());
+                let mut date = None;
+                for (i, e) in eps.into_iter().enumerate() {
+                    let at = parse_time_opt("occurred_at", e.occurred_at.as_deref())?;
+                    date = date.or(at);
+                    turns.push(SessionTurn {
+                        id: e.id.unwrap_or_else(|| format!("ep{:05}", i + 1)),
+                        speaker: e.speaker.unwrap_or_else(|| "user".into()),
+                        assistant: false,
+                        text: e.text,
+                    });
+                }
+                SessionInput {
+                    id: "episodes".into(),
+                    date,
+                    turns,
+                }
+            }
+            _ => {
+                return Err(ApiError::invalid(
+                    "give exactly one of source_id, text or a non-empty episodes list",
+                ));
+            }
+        };
+        let chars: usize = session.turns.iter().map(|t| t.text.chars().count()).sum();
+        if chars > MAX_SUMMARIZE_CHARS {
+            return Err(ApiError::new(
+                ErrorCode::LimitExceeded,
+                format!("{chars} characters to summarize; the limit is {MAX_SUMMARIZE_CHARS}"),
+            )
+            .with_reason("SUMMARIZE_TOO_LARGE"));
+        }
+        if session.turns.iter().all(|t| t.text.trim().is_empty()) {
+            return Err(ApiError::invalid("nothing to summarize: the text is empty"));
+        }
+        let (Some(summarizer), Some(model)) = (&self.summarizer, &self.model) else {
+            return Err(ApiError::new(
+                ErrorCode::Unavailable,
+                "no model is configured; set KEEP_MODEL_ENDPOINT and KEEP_MODEL_NAME",
+            )
+            .with_reason("MODEL_NOT_CONFIGURED"));
+        };
+        let summary = summarizer.summarize(&session).await.map_err(|e| match e {
+            ProviderError::BudgetExhausted { .. } => {
+                ApiError::new(ErrorCode::BudgetExceeded, format!("model budget: {e}"))
+                    .with_reason("MODEL_BUDGET_EXHAUSTED")
+            }
+            e => ApiError::new(ErrorCode::Unavailable, format!("model call failed: {e}"))
+                .with_reason("PROVIDER"),
+        })?;
+        Ok(json!({
+            "scope": scope.label(),
+            "summary": summary.text,
+            "model": model.id,
+            "usage": {
+                "inputTokens": summary.usage.input_tokens,
+                "outputTokens": summary.usage.output_tokens,
+            },
+        }))
+    }
+
+    /// A source's episodes as one session, or not found when `access` may
+    /// not read it.
+    async fn source_session(
+        &self,
+        scope: &Scope,
+        access: &Access,
+        id: &str,
+    ) -> Result<SessionInput, ApiError> {
+        let corpus = scope.corpus();
+        let not_found = || ApiError::not_found(format!("source {id:?}"));
+        let ledger = self.knowledge.ledger();
+        match ledger.source(&corpus, id).await? {
+            Some(s) if access.allows_source(&s) => {}
+            _ => return Err(not_found()),
+        }
+        let episodes = ledger.source_episodes(&corpus, id).await?;
+        if episodes.len() > MAX_SUMMARIZE_EPISODES * 10 {
+            return Err(ApiError::new(
+                ErrorCode::LimitExceeded,
+                format!(
+                    "source {id:?} has {} episodes; too many to summarize",
+                    episodes.len()
+                ),
+            )
+            .with_reason("SUMMARIZE_TOO_LARGE"));
+        }
+        let date = episodes.iter().find_map(|e| e.occurred_at);
+        let turns = episodes
+            .iter()
+            .flat_map(|e| text_turns(&e.id, &e.speaker, &e.text))
+            .collect();
+        Ok(SessionInput {
+            id: id.to_owned(),
+            date,
+            turns,
+        })
     }
 
     /// The scope's enrichment state, or `unknown` when it cannot be read.
@@ -854,7 +1007,7 @@ impl KeepService {
         }
         let request = SearchRequest {
             corpus: scope.corpus(),
-            access: scope.access(),
+            access: read_access(&scope, req.source_ids, req.collections)?,
             query: req.query,
             as_of: as_of(req.as_of.as_deref(), req.valid_at.as_deref())?,
             limit: req.limit.unwrap_or(10),
@@ -875,17 +1028,12 @@ impl KeepService {
         caller: &str,
     ) -> Result<Value, ApiError> {
         let scope = self.scope(req.scope.as_ref())?;
+        let access = read_access(&scope, req.source_ids, req.collections)?;
         let as_of = as_of(req.as_of.as_deref(), req.valid_at.as_deref())?;
         let (mut allowance, held) = self.allowance_for(caller, req.budget_tokens)?;
         let res = self
             .knowledge
-            .fetch(
-                &scope.corpus(),
-                &scope.access(),
-                &req.id,
-                as_of,
-                &mut allowance,
-            )
+            .fetch(&scope.corpus(), &access, &req.id, as_of, &mut allowance)
             .await;
         self.settle(held, &allowance);
         let res = res?;
@@ -900,6 +1048,7 @@ impl KeepService {
         if req.level > 2 {
             return Err(ApiError::invalid("level must be 0, 1 or 2"));
         }
+        let access = read_access(&scope, req.source_ids, req.collections)?;
         let request = IndexRequest {
             level: req.level,
             collection: req.collection,
@@ -909,7 +1058,7 @@ impl KeepService {
         };
         let view = self
             .knowledge
-            .index(&scope.corpus(), &scope.access(), &request)
+            .index(&scope.corpus(), &access, &request)
             .await?;
         let mut out = to_value(&view);
         out["scope"] = json!(scope.label());
@@ -947,9 +1096,10 @@ impl KeepService {
 
     pub async fn knowledge_cite(&self, req: KnowledgeCiteReq) -> Result<Value, ApiError> {
         let scope = self.scope(req.scope.as_ref())?;
+        let access = read_access(&scope, req.source_ids, req.collections)?;
         let citations = self
             .knowledge
-            .cite(&scope.corpus(), &scope.access(), &req.id)
+            .cite(&scope.corpus(), &access, &req.id)
             .await?;
         Ok(json!({ "scope": scope.label(), "id": req.id, "citations": citations }))
     }
@@ -968,16 +1118,10 @@ impl KeepService {
             return Err(ApiError::invalid("fanout must be between 1 and 25"));
         }
         let as_of = as_of(req.as_of.as_deref(), req.valid_at.as_deref())?;
+        let access = read_access(&scope, req.source_ids, req.collections)?;
         let n = self
             .knowledge
-            .traverse(
-                &scope.corpus(),
-                &scope.access(),
-                &req.start,
-                depth,
-                fanout,
-                as_of,
-            )
+            .traverse(&scope.corpus(), &access, &req.start, depth, fanout, as_of)
             .await?;
         let mut out = to_value(&n);
         out["scope"] = json!(scope.label());
@@ -1147,6 +1291,33 @@ impl KeepService {
         }
         Ok(None)
     }
+}
+
+/// Most ids or collections one read may name.
+const MAX_READ_FILTER: usize = 1000;
+
+/// The scope's read access, narrowed to the requested sources and
+/// collections.
+fn read_access(
+    scope: &Scope,
+    source_ids: Option<Vec<String>>,
+    collections: Option<Vec<String>>,
+) -> Result<Access, ApiError> {
+    let mut access = scope.access();
+    for (field, list) in [("source_ids", &source_ids), ("collections", &collections)] {
+        if list.as_ref().is_some_and(|l| l.len() > MAX_READ_FILTER) {
+            return Err(ApiError::invalid(format!(
+                "{field} lists more than {MAX_READ_FILTER} entries"
+            )));
+        }
+    }
+    if let Some(ids) = source_ids {
+        access = access.only_sources(ids);
+    }
+    if let Some(names) = collections {
+        access = access.only_collections(names);
+    }
+    Ok(access)
 }
 
 fn parse<T: DeserializeOwned>(args: Value) -> Result<T, ApiError> {

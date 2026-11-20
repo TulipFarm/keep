@@ -33,6 +33,17 @@ Attribute every point to the person it is about; never merge two people's experi
 Skip greetings and general advice. If the session says nothing about the people, reply: \
 Nothing about the people.";
 
+/// Bumped whenever [`DOCUMENT_SUMMARY_PROMPT`] changes.
+pub const DOCUMENT_SUMMARY_PROMPT_VERSION: &str = "document-summary-v1";
+
+/// For material that is not a conversation between people, such as a
+/// document a host application ingested.
+pub const DOCUMENT_SUMMARY_PROMPT: &str = "You read some source material (a document or the \
+turns of a conversation) and write a short summary of it for a reader who has not seen it.\n\
+Write 2 to 6 plain sentences, at most 150 words, with no heading or list. Keep the main \
+points and the specifics: names, titles, places, numbers and dates. Use only what the \
+material says; never add outside facts or advice. Reply with the summary only.";
+
 /// What one session produced.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionSummary {
@@ -44,10 +55,19 @@ pub struct SessionSummary {
 
 /// The chat request for `session`.
 pub fn summary_request(session: &SessionInput, max_output_tokens: u32) -> ChatRequest {
+    summary_request_with(SUMMARY_PROMPT, session, max_output_tokens)
+}
+
+/// The chat request for `session` under the system `prompt`.
+pub fn summary_request_with(
+    prompt: &str,
+    session: &SessionInput,
+    max_output_tokens: u32,
+) -> ChatRequest {
     let user = render_session(session);
-    let estimated = (SUMMARY_PROMPT.len() + user.len()).div_ceil(4) as u64;
+    let estimated = (prompt.len() + user.len()).div_ceil(4) as u64;
     ChatRequest {
-        messages: vec![Message::system(SUMMARY_PROMPT), Message::user(user)],
+        messages: vec![Message::system(prompt), Message::user(user)],
         max_output_tokens,
         temperature: 0.0,
         seed: Some(0),
@@ -82,6 +102,8 @@ pub struct SessionSummarizer {
     model_id: String,
     cache: Option<ExtractionCache>,
     max_output_tokens: u32,
+    prompt: &'static str,
+    prompt_version: &'static str,
 }
 
 impl SessionSummarizer {
@@ -98,7 +120,17 @@ impl SessionSummarizer {
             model_id: model_id.into(),
             cache,
             max_output_tokens,
+            prompt: SUMMARY_PROMPT,
+            prompt_version: SUMMARY_PROMPT_VERSION,
         }
+    }
+
+    /// Summarise with [`DOCUMENT_SUMMARY_PROMPT`] instead of the
+    /// people-focused session prompt.
+    pub fn for_documents(mut self) -> Self {
+        self.prompt = DOCUMENT_SUMMARY_PROMPT;
+        self.prompt_version = DOCUMENT_SUMMARY_PROMPT_VERSION;
+        self
     }
 
     pub fn max_output_tokens(&self) -> u32 {
@@ -111,15 +143,11 @@ impl SessionSummarizer {
 
     /// Label recorded in context methods.
     pub fn label(&self) -> String {
-        format!("session:{}:{SUMMARY_PROMPT_VERSION}", self.model_id)
+        format!("session:{}:{}", self.model_id, self.prompt_version)
     }
 
     pub fn key(&self, session: &SessionInput) -> String {
-        cache_key(
-            &self.model_id,
-            SUMMARY_PROMPT_VERSION,
-            &session_hash(session),
-        )
+        cache_key(&self.model_id, self.prompt_version, &session_hash(session))
     }
 
     pub fn is_cached(&self, session: &SessionInput) -> bool {
@@ -155,16 +183,20 @@ impl SessionSummarizer {
         };
         let content_hash = session_hash(session);
         let response = model
-            .complete(&summary_request(session, self.max_output_tokens))
+            .complete(&summary_request_with(
+                self.prompt,
+                session,
+                self.max_output_tokens,
+            ))
             .await?;
         let ai_credits = response.billing.as_ref().map(|b| b.ai_credits);
         if let Some(cache) = &self.cache {
             cache
                 .put(
-                    &cache_key(&self.model_id, SUMMARY_PROMPT_VERSION, &content_hash),
+                    &cache_key(&self.model_id, self.prompt_version, &content_hash),
                     &CachedReply {
                         model: self.model_id.clone(),
-                        prompt_version: SUMMARY_PROMPT_VERSION.into(),
+                        prompt_version: self.prompt_version.into(),
                         content_hash,
                         text: response.text.clone(),
                         usage: response.usage,

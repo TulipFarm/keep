@@ -117,7 +117,7 @@ the subcommand.
 | `--no-profile-writes` | `KEEP_NO_PROFILE_WRITES` | off | Refuse writes to `/profile.md` |
 | `--embedder` | `KEEP_EMBEDDER` | `local` if built with `local-embeddings`, else `hash` | Knowledge embedder; see [Embeddings](#embeddings) |
 | `--data-dir` | `KEEP_DATA_DIR` | platform data dir | Receipt key and model cache; see [Receipts](#receipts-and-the-data-directory) |
-| | `KEEP_MODEL_CACHE` | `<data-dir>/models` | Where the local model is downloaded |
+| | `KEEP_MODEL_CACHE` | `<data-dir>/models` | Where the local model is downloaded; `/opt/keep/models` (baked in) in the image |
 | `--evidence-budget-tokens` | `KEEP_EVIDENCE_BUDGET_TOKENS` | off | Evidence each caller may draw per window; see [Evidence budget](#evidence-budget) |
 | `--evidence-budget-window-secs` | `KEEP_EVIDENCE_BUDGET_WINDOW_SECS` | 3600 | Length of the rolling window |
 | `--evidence-budget-per` | `KEEP_EVIDENCE_BUDGET_PER` | `token` | `token` or `session` |
@@ -130,6 +130,23 @@ the subcommand.
 | `serve --max-body-bytes` | `KEEP_MAX_BODY_BYTES` | 1 MiB | Largest accepted request body |
 | | `KEEP_API_TOKEN` | none | Administrator bearer token: full access. `keep mcp --server` sends it. |
 | | `KEEP_RECEIPT_KEY` | persisted | Hex key that signs receipts; overrides the stored one |
+| `--model-endpoint` | `KEEP_MODEL_ENDPOINT` | off | OpenAI-compatible endpoint for fact extraction and `knowledge_summarize`; see [Model-backed extraction](#model-backed-extraction-and-summaries) |
+| `--model-name` | `KEEP_MODEL_NAME` | | Model name sent in requests; required with an endpoint |
+| `--model-api-key` | `KEEP_MODEL_API_KEY` | none | API key; prefer the file variant |
+| `--model-api-key-file` | `KEEP_MODEL_API_KEY_FILE` | none | File holding the API key, such as a mounted secret |
+| `--model-api-style` | `KEEP_MODEL_API_STYLE` | `openai` | `openai`, `azure-v1` or `azure-deployments` |
+| `--model-api-version` | `KEEP_MODEL_API_VERSION` | none | `api-version` query parameter; required by `azure-deployments` |
+| `--model-deployment` | `KEEP_MODEL_DEPLOYMENT` | none | Azure deployment; required by `azure-deployments`, sent as `model` by `azure-v1` |
+| `--model-auth-header` | `KEEP_MODEL_AUTH_HEADER` | `api-key` for Azure styles, else `bearer` | Header that carries the key |
+| `--model-served-name` | `KEEP_MODEL_SERVED_NAME` | none | Exact `model` every reply must report; a mismatch stops further calls |
+| `--model-reasoning-effort` | `KEEP_MODEL_REASONING_EFFORT` | none | `reasoning_effort` for reasoning models |
+| `--model-timeout-secs` | `KEEP_MODEL_TIMEOUT_SECS` | 60 | Timeout for one model call |
+| `--model-concurrency` | `KEEP_MODEL_CONCURRENCY` | 4 | Model calls in flight at once in this process |
+| `--model-reply-tokens` | `KEEP_MODEL_REPLY_TOKENS` | 2048 | Most output tokens per call |
+| `--model-budget-calls` | `KEEP_MODEL_BUDGET_CALLS` | 100000 | Most model calls per process |
+| `--model-budget-input-tokens` | `KEEP_MODEL_BUDGET_INPUT_TOKENS` | 100000000 | Most input tokens per process |
+| `--model-budget-output-tokens` | `KEEP_MODEL_BUDGET_OUTPUT_TOKENS` | 20000000 | Most output tokens per process |
+| `--no-model-extraction` | `KEEP_NO_MODEL_EXTRACTION` | off | Use the model for `knowledge_summarize` only; extraction stays rule-based |
 
 ### Embeddings
 
@@ -140,13 +157,17 @@ the vector side:
   ONNX. It is compiled in only with the `local-embeddings` cargo feature,
   and is then the default. The model files, pinned by revision and SHA-256,
   are downloaded once on first start to `KEEP_MODEL_CACHE` (default
-  `<data-dir>/models`); after that no network access is needed. Asking for
-  `local` in a build without the feature fails at start-up.
+  `<data-dir>/models`); after that no network access is needed.
+  `keep fetch-model --dir DIR` downloads and verifies them ahead of time;
+  the container image runs it at build time, so the image never downloads
+  the model. Asking for `local` in a build without the feature fails at
+  start-up.
 - `hash`: Keep's offline hash embedder (256 dimensions). It needs no model
   and suits tests, but its semantic recall is weak.
 
-The server never calls a hosted model API. Besides that one-time download it
-talks only to the configured Postgres and Qdrant.
+Unless a chat model is configured (see below), the server never calls a
+hosted model API. Besides that one-time download it talks only to the
+configured Postgres and Qdrant.
 
 With a Postgres profile the embedder and its dimension are recorded per
 collection. A server started with a different embedder refuses to start
@@ -154,6 +175,47 @@ rather than mix vectors. To switch, either keep the old `--embedder`, or
 start with the new embedder and a new, empty `--collection`, then call
 `knowledge_rebuild_projection` once for each user to re-embed from the
 records in Postgres. `GET /v1/health` reports the embedder in use.
+
+### Model-backed extraction and summaries
+
+By default Knowledge extracts facts with deterministic rules. Set
+`KEEP_MODEL_ENDPOINT` and `KEEP_MODEL_NAME` to extract them with an
+OpenAI-compatible chat model instead, the same extractor the benchmark
+harness uses:
+
+```sh
+export KEEP_MODEL_ENDPOINT=https://api.example.com/v1
+export KEEP_MODEL_NAME=small-chat-model
+export KEEP_MODEL_API_KEY_FILE=/run/secrets/model_api_key
+```
+
+For Azure OpenAI use `KEEP_MODEL_API_STYLE=azure-v1` with
+`KEEP_MODEL_ENDPOINT=https://<resource>.openai.azure.com` and the deployment
+in `KEEP_MODEL_DEPLOYMENT`, or `azure-deployments` with
+`KEEP_MODEL_API_VERSION` as well. Keys go in an `api-key` header for the
+Azure styles unless `KEEP_MODEL_AUTH_HEADER` says otherwise.
+
+- Extraction runs in the job queue: each episode is read on its own, cut at
+  whitespace into turns of at most 4,000 characters and calls of at most 8
+  turns, and every fact cites the episode it came from. There is no
+  cross-episode context. Up to `KEEP_MODEL_CONCURRENCY` calls run at once.
+- `knowledge_ingest` waits for the jobs, so with a model it returns after
+  the model calls. Calls that fail are explicit job states, never silently
+  dropped: a timeout, rate limit, transport error or HTTP 5xx is retried
+  (`enrichment.state` is `pending`, and the background worker retries it);
+  a malformed reply, a configuration error or an exhausted budget fails the
+  job after its attempts (`failed`). The ingested text stays searchable
+  either way.
+- `KEEP_MODEL_BUDGET_*` caps the calls and tokens one process may use; past
+  a cap every call fails with `budget exhausted` until restart. Nothing
+  converts tokens to money, so set the caps from your price.
+- Bad configuration, such as an endpoint without a model name, both key
+  variables, or a zero budget, stops the server at start-up.
+- `GET /v1/health` reports the model name, endpoint host and style, and the
+  calls and tokens used so far. It never shows the key.
+
+The same model serves `knowledge_summarize`. Without a model configured that
+tool returns `unavailable` with reason `MODEL_NOT_CONFIGURED`.
 
 ### Receipts and the data directory
 
@@ -194,7 +256,8 @@ restarts.
 Every tool takes an optional `scope: {"user": "...", "project": "..."}`.
 Fields you leave out fall back to `--user` and `--project`. Pass
 `"project": ""` to force the personal scope when the server has a default
-project. Ids are 1 to 64 letters, digits, `.`, `_` or `-`.
+project. Ids are 1 to 128 letters, digits, `.`, `_` or `-`, so a host can use
+ids such as `ws-<uuid>` or `ws-<uuid>-m-<uuid>` (78 characters) directly.
 
 | | Project scope (`alex` + `billing-api`) | Personal scope (`alex`) |
 | --- | --- | --- |
@@ -242,6 +305,7 @@ input schema is in `tools/list`, or `GET /v1/tools` over HTTP.
 | `knowledge_index` | `POST /v1/knowledge/index` | Book-style index: level 0 collections, level 1 sources and topics, level 2 entities |
 | `knowledge_forget_source` | `POST /v1/knowledge/forget_source` | Erase one source and everything derived only from it. Returns a receipt. |
 | `knowledge_status` | `POST /v1/knowledge/status` | Background job counts and enrichment state for the scope only |
+| `knowledge_summarize` | `POST /v1/knowledge/summarize` | A few sentences summarizing one readable `source_id`, some `text`, or `episodes` (at most 200 turns, 200,000 characters), written by the configured model; see [Model-backed extraction](#model-backed-extraction-and-summaries). Needs `read`. |
 | `knowledge_rebuild_projection` | `POST /v1/knowledge/rebuild_projection` | Re-embed the scope user's whole corpus into the vector index from the records. Needs the `admin` permission. |
 
 `GET /v1/health` (also `/v1/health/live`) reports the version, storage
@@ -254,6 +318,58 @@ results. Neither endpoint needs a token or includes error text.
 `keep healthcheck [--url URL]` exits non-zero unless the ready endpoint
 returns 200; container healthchecks use it. `GET /v1/tools` lists every
 tool with its route and input schema; it needs any valid token.
+
+### Sources for a host application
+
+A host application that indexes its own documents can address them by its
+own ids and keep each user's reads to the documents that user may see.
+
+**Ingest.** `knowledge_ingest` takes `source_id`, `title`, `collection`,
+`kind` (`document` or `conversation`) and an optional `metadata` object: at
+most 16 string keys of up to 64 bytes, with string values of up to 1,024
+bytes, such as the document's URL or id in the host. Metadata is stored with
+the source and returned on every hit's citation as `source_metadata`.
+
+**New revisions.** Ingesting a `source_id` again with different text fails
+with `conflict` unless the call passes `"replace": true`. Replace removes the
+source's old episodes, chunks, facts derived only from it and its vectors,
+and stores the new revision with its new title, collection and metadata, in
+one ledger transaction: a search sees the old revision or the new one, never
+both. The response's `replaced` is `true` when the text, title, collection or metadata changed and
+`false` when it was identical (then nothing is rewritten). Facts also
+supported by other sources keep that other evidence. Replace does not issue
+a forget receipt; use `knowledge_forget_source` to erase a source.
+
+**Allowlists.** `knowledge_search`, `knowledge_fetch`, `knowledge_cite`,
+`knowledge_traverse` and `knowledge_index` take optional `source_ids` and
+`collections` lists (at most 1,000 entries each):
+
+- Only passages, facts and index entries derived from a listed source are
+  returned. With both lists, a source must be in both. An empty list
+  matches nothing.
+- The filter runs inside retrieval, before ranking, limits and the evidence
+  budget, for both lexical and vector search and in every storage profile
+  (a pgvector `WHERE` clause or a Qdrant payload filter), so a narrow
+  allowlist still gets a full page of results.
+- A fact supported by several sources is returned when at least one of them
+  is allowed, and shows only the allowed evidence.
+- Results read as if the other sources did not exist. A fact superseded
+  only by a fact from a disallowed source stays active, with no `valid_to`
+  or version caused by it, including for `valid_at` reads. Entity aliases
+  in `knowledge_index` and `knowledge_traverse` come only from allowed
+  sources, and an alias known only from a disallowed source does not start
+  a traversal.
+- `knowledge_fetch` or `knowledge_cite` of an id outside the allowlist fails
+  with the same `not_found` error as an id that does not exist.
+- `knowledge_summarize` takes the same lists for `source_id`: a source
+  outside them is `not_found`. They do not apply to `text` or `episodes`,
+  which the caller supplies.
+- The lists narrow what the scope can already read; they never widen it.
+
+Vectors written before this release carry no source tags, so the vector
+side of a filtered search misses them until `knowledge_rebuild_projection`
+re-embeds the corpus; lexical search finds them meanwhile. Filtered
+`knowledge_index` views are computed per call rather than cached.
 
 ### Operation states
 
@@ -415,12 +531,33 @@ docker compose -f deploy/compose.yaml --profile postgres-qdrant up -d --wait
   root filesystem and no capabilities; its data directory is the `keep-data`
   volume.
 - The image uses the `hash` embedder. Build with
-  `--build-arg KEEP_FEATURES=local-embeddings` for the local model.
+  `--build-arg KEEP_FEATURES=local-embeddings` for the local model, which is
+  then baked into the image.
 - `docker compose ... down` keeps the data; `down -v` deletes it, secrets
   included.
 
 `scripts/compose-smoke.sh` builds the image and checks both profiles end to
 end on spare ports, then removes everything it created.
+
+### Published image
+
+The `Image` workflow publishes `ghcr.io/tulipfarm/keep`, built with
+`local-embeddings` and the pinned model baked in, for `linux/amd64` and
+`linux/arm64`:
+
+- `main` and `sha-<short sha>` for each push to `main`;
+- `X.Y.Z`, `X.Y` and (from 1.0) `X` for each `vX.Y.Z` tag.
+
+It runs as user `keep` (uid 10001) and starts `keep serve`. Each build is
+smoke-tested with no network: the server must become ready, by
+`keep healthcheck`, from the baked model. The workflow prints the
+multi-platform digest; pin it in deployments:
+
+```sh
+docker run --rm -p 127.0.0.1:7357:7357 \
+  -e KEEP_BIND=0.0.0.0:7357 -e KEEP_API_TOKEN=... -e KEEP_INSECURE_HTTP=1 \
+  ghcr.io/tulipfarm/keep@sha256:<digest>
+```
 
 ## Try it over HTTP
 
@@ -529,3 +666,5 @@ This is an alpha.
 - Memory forget erases synchronously and returns a receipt; there is no
   separate erasure journal replayed at start-up yet.
 - Ingest does not return an operation id; poll `knowledge_status` instead.
+- Model-backed extraction reads each episode alone, and `knowledge_ingest`
+  waits for it. Summaries are not stored.

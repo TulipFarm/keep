@@ -8,7 +8,7 @@
 //! across partitions, so nothing derived from a restricted source can shape
 //! what a caller without access sees.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,13 @@ pub fn digest_hex(parts: &[&str]) -> String {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Access {
     pub partitions: BTreeSet<String>,
+    /// When set, only records derived from these sources are visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sources: Option<BTreeSet<String>>,
+    /// When set, only records derived from sources in these collections are
+    /// visible. Combined with `sources`, a source must satisfy both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collections: Option<BTreeSet<String>>,
 }
 
 impl Access {
@@ -46,11 +53,46 @@ impl Access {
     {
         Self {
             partitions: labels.into_iter().map(Into::into).collect(),
+            sources: None,
+            collections: None,
         }
+    }
+
+    /// Narrow reads to records derived from these sources. An empty list
+    /// shows nothing.
+    pub fn only_sources<I, S>(mut self, ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.sources = Some(ids.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Narrow reads to records derived from sources in these collections.
+    /// An empty list shows nothing.
+    pub fn only_collections<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.collections = Some(names.into_iter().map(Into::into).collect());
+        self
     }
 
     pub fn allows(&self, partition: &str) -> bool {
         self.partitions.contains(partition)
+    }
+
+    /// Whether a read may see this source: its partition is readable and it
+    /// passes any source and collection allowlist.
+    pub fn allows_source(&self, s: &Source) -> bool {
+        self.allows(&s.partition)
+            && self.sources.as_ref().is_none_or(|ids| ids.contains(&s.id))
+            && self
+                .collections
+                .as_ref()
+                .is_none_or(|cols| cols.contains(&s.collection))
     }
 
     pub fn labels(&self) -> Vec<String> {
@@ -92,6 +134,9 @@ pub struct Source {
     pub title: String,
     pub kind: SourceKind,
     pub created_at: Time,
+    /// Small host-defined string map, such as a document URL or id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
 }
 
 /// One timestamped unit of a source: a message or a document section.

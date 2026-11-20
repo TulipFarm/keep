@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+futures-util.workspace = true
 hex.workspace = true
 keep-postgres.workspace = true
 keep-providers.workspace = true

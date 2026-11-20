@@ -101,6 +101,9 @@ async fn memory_and_knowledge_migrate_into_one_schema_in_either_order() {
         assert!(tables.iter().any(|t| t == "memory_trees"));
         assert!(tables.iter().any(|t| t == "knowledge_sources"));
         assert_eq!(mem, ["memory_0001_ledger", "memory_0002_erasure_journal"]);
-        assert_eq!(know, ["knowledge_0001_ledger"]);
+        assert_eq!(
+            know,
+            ["knowledge_0001_ledger", "knowledge_0002_source_metadata"]
+        );
     }
 }

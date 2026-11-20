@@ -97,6 +97,66 @@ impl PgVectorIndex {
         Ok(slot.clone())
     }
 
+    /// Exact nearest neighbours in one namespace, optionally only among
+    /// points sharing a tag with `tags`.
+    async fn nearest(
+        &self,
+        collection: &str,
+        namespace: &str,
+        query: &[f32],
+        k: usize,
+        tags: Option<&[String]>,
+    ) -> Result<Vec<ScoredId>, StoreError> {
+        let table = table_for(collection)?;
+        let dims = self.dimensions(collection).await?;
+        if query.len() != dims {
+            return Err(StoreError::DimensionMismatch {
+                expected: dims,
+                got: query.len(),
+            });
+        }
+        let q = Vector::from(query.to_vec());
+        let limit = i64::try_from(k).map_err(backend)?;
+        let client = self.client().await?;
+        let rows = match tags {
+            None => {
+                client
+                    .query(
+                        &format!(
+                            "SELECT id, (1 - (embedding <=> $1))::real AS score FROM {table}
+                         WHERE namespace = $2
+                         ORDER BY embedding <=> $1, id
+                         LIMIT $3"
+                        ),
+                        &[&q, &namespace, &limit],
+                    )
+                    .await
+            }
+            Some(tags) => {
+                client
+                    .query(
+                        &format!(
+                            "SELECT id, (1 - (embedding <=> $1))::real AS score FROM {table}
+                         WHERE namespace = $2 AND tags && $4
+                         ORDER BY embedding <=> $1, id
+                         LIMIT $3"
+                        ),
+                        &[&q, &namespace, &limit, &tags],
+                    )
+                    .await
+            }
+        }
+        .map_err(backend)?;
+        let hits = rows
+            .iter()
+            .map(|r| ScoredId {
+                id: r.get(0),
+                score: r.get::<_, Option<f32>>(1).unwrap_or(0.0),
+            })
+            .collect();
+        Ok(keep_store::rank(hits, k))
+    }
+
     async fn dimensions(&self, collection: &str) -> Result<usize, StoreError> {
         let row = self
             .client()
@@ -155,8 +215,11 @@ impl VectorIndex for PgVectorIndex {
                      namespace text NOT NULL,
                      id text NOT NULL,
                      embedding vector({dimensions}) NOT NULL,
+                     tags text[] NOT NULL DEFAULT '{{}}',
                      PRIMARY KEY (namespace, id)
-                 )"
+                 );
+                 ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{{}}';
+                 CREATE INDEX IF NOT EXISTS {table}_tags ON {table} USING gin (tags);"
             ),
         )
         .await
@@ -180,15 +243,16 @@ impl VectorIndex for PgVectorIndex {
         let client = self.client().await?;
         let stmt = client
             .prepare(&format!(
-                "INSERT INTO {table} (namespace, id, embedding) VALUES ($1, $2, $3)
-                 ON CONFLICT (namespace, id) DO UPDATE SET embedding = EXCLUDED.embedding"
+                "INSERT INTO {table} (namespace, id, embedding, tags) VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (namespace, id)
+                 DO UPDATE SET embedding = EXCLUDED.embedding, tags = EXCLUDED.tags"
             ))
             .await
             .map_err(backend)?;
         for p in points {
             let v = Vector::from(p.vector.clone());
             client
-                .execute(&stmt, &[&namespace, &p.id, &v])
+                .execute(&stmt, &[&namespace, &p.id, &v, &p.tags])
                 .await
                 .map_err(backend)?;
         }
@@ -202,38 +266,22 @@ impl VectorIndex for PgVectorIndex {
         query: &[f32],
         k: usize,
     ) -> Result<Vec<ScoredId>, StoreError> {
-        let table = table_for(collection)?;
-        let dims = self.dimensions(collection).await?;
-        if query.len() != dims {
-            return Err(StoreError::DimensionMismatch {
-                expected: dims,
-                got: query.len(),
-            });
+        self.nearest(collection, namespace, query, k, None).await
+    }
+
+    async fn search_tagged(
+        &self,
+        collection: &str,
+        namespace: &str,
+        query: &[f32],
+        k: usize,
+        tags: &[String],
+    ) -> Result<Vec<ScoredId>, StoreError> {
+        if tags.is_empty() {
+            return Ok(Vec::new());
         }
-        let q = Vector::from(query.to_vec());
-        let limit = i64::try_from(k).map_err(backend)?;
-        let rows = self
-            .client()
-            .await?
-            .query(
-                &format!(
-                    "SELECT id, (1 - (embedding <=> $1))::real AS score FROM {table}
-                     WHERE namespace = $2
-                     ORDER BY embedding <=> $1, id
-                     LIMIT $3"
-                ),
-                &[&q, &namespace, &limit],
-            )
+        self.nearest(collection, namespace, query, k, Some(tags))
             .await
-            .map_err(backend)?;
-        let hits = rows
-            .iter()
-            .map(|r| ScoredId {
-                id: r.get(0),
-                score: r.get::<_, Option<f32>>(1).unwrap_or(0.0),
-            })
-            .collect();
-        Ok(keep_store::rank(hits, k))
     }
 
     async fn delete_namespace(&self, collection: &str, namespace: &str) -> Result<(), StoreError> {

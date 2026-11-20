@@ -9,8 +9,14 @@
 //!   closed where the old one starts;
 //! - same start, or either start unknown: neither can win, so both are
 //!   marked disputed and remain visible.
+//!
+//! A read restricted to some sources sees each contested fact as if facts
+//! supported only by other sources had never been recorded: [`restrict`]
+//! replays the group's resolution among the facts it may see.
 
-use crate::model::{FactStatus, FactVersion, Time, TimeBasis};
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::model::{Fact, FactStatus, FactVersion, Time, TimeBasis};
 
 /// The current version of an existing competing fact.
 #[derive(Clone, Debug)]
@@ -107,6 +113,96 @@ pub fn plan(incoming: &Incoming, rivals: &[Rival], now: Time) -> Plan {
         incoming: first,
         rival_versions,
     }
+}
+
+/// Version histories of one single-valued group, replayed in the order its
+/// facts were first recorded, as if no other fact existed.
+pub fn replay(facts: &[&Fact]) -> BTreeMap<String, Vec<FactVersion>> {
+    let mut order: Vec<&Fact> = facts
+        .iter()
+        .copied()
+        .filter(|f| !f.versions.is_empty())
+        .collect();
+    order.sort_by(|a, b| {
+        (a.versions[0].recorded_at, &a.id).cmp(&(b.versions[0].recorded_at, &b.id))
+    });
+    let mut out: BTreeMap<String, Vec<FactVersion>> = BTreeMap::new();
+    for f in order {
+        let first = &f.versions[0];
+        let now = first.recorded_at;
+        let rivals: Vec<Rival> = out
+            .iter()
+            .filter_map(|(id, h)| {
+                h.last().map(|v| Rival {
+                    fact_id: id.clone(),
+                    current: v.clone(),
+                })
+            })
+            .collect();
+        let p = plan(
+            &Incoming {
+                fact_id: f.id.clone(),
+                valid_from: first.valid_from,
+                basis: first.valid_from_basis,
+            },
+            &rivals,
+            now,
+        );
+        for (rid, _, v) in p.rival_versions {
+            if let Some(h) = out.get_mut(&rid) {
+                if let Some(cur) = h.last_mut() {
+                    cur.invalidated_at = Some(now);
+                }
+                h.push(v);
+            }
+        }
+        out.insert(f.id.clone(), vec![p.incoming]);
+    }
+    out
+}
+
+/// `f` as a read limited to `allowed` sources sees it: only allowed
+/// evidence, and, when facts it was resolved against have no allowed
+/// evidence, versions replayed among the facts of `group` (every fact with
+/// `f`'s partition, subject and predicate) that the read may see. `None`
+/// when no evidence is allowed.
+pub fn restrict(f: &Fact, allowed: &BTreeSet<String>, group: &[&Fact]) -> Option<Fact> {
+    let visible = |x: &Fact| x.evidence.iter().any(|e| allowed.contains(&e.source_id));
+    let mut out = f.clone();
+    out.evidence.retain(|e| allowed.contains(&e.source_id));
+    if out.evidence.is_empty() {
+        return None;
+    }
+    let by_id: BTreeMap<&str, &Fact> = group.iter().map(|x| (x.id.as_str(), *x)).collect();
+    // Facts that took part in resolution: those with a cause, and the causes.
+    let mut parts: BTreeSet<&str> = BTreeSet::new();
+    for x in group.iter().copied().chain(std::iter::once(f)) {
+        for v in &x.versions {
+            if let Some(c) = &v.cause {
+                parts.insert(x.id.as_str());
+                parts.insert(c.as_str());
+            }
+        }
+    }
+    if !parts.contains(f.id.as_str()) {
+        return Some(out);
+    }
+    let hidden = parts
+        .iter()
+        .any(|id| by_id.get(id).is_none_or(|x| !visible(x)));
+    if !hidden {
+        return Some(out);
+    }
+    let mut seen: Vec<&Fact> = parts
+        .iter()
+        .filter_map(|id| by_id.get(id).copied())
+        .filter(|x| visible(x) && x.id != f.id)
+        .collect();
+    seen.push(f);
+    if let Some(versions) = replay(&seen).remove(&f.id) {
+        out.versions = versions;
+    }
+    Some(out)
 }
 
 #[cfg(test)]

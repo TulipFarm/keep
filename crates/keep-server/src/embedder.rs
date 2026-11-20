@@ -56,6 +56,24 @@ async fn load_local(model_cache: &Path) -> anyhow::Result<Arc<dyn Embedder>> {
     Ok(Arc::new(e))
 }
 
+/// Download (or verify) the pinned local model under `model_cache`, and
+/// return the directory holding it.
+#[cfg(feature = "local-embeddings")]
+pub async fn fetch_local(model_cache: &Path) -> anyhow::Result<std::path::PathBuf> {
+    use keep_providers::local_embed::{LocalEmbedConfig, ensure_files};
+    let config =
+        LocalEmbedConfig::bge_small_en_v1_5(model_cache.to_owned()).with_env_overrides()?;
+    ensure_files(&config)
+        .await
+        .map_err(|e| anyhow::anyhow!("fetching the local embedding model: {e}"))?;
+    Ok(config.model_dir())
+}
+
+#[cfg(not(feature = "local-embeddings"))]
+pub async fn fetch_local(_: &Path) -> anyhow::Result<std::path::PathBuf> {
+    Err(not_compiled())
+}
+
 #[cfg(not(feature = "local-embeddings"))]
 fn local_record() -> anyhow::Result<EmbedderRecord> {
     Err(not_compiled())

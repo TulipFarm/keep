@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
 
-pub const MAX_ID_LEN: usize = 64;
+/// Long enough for composite host ids such as `ws-<uuid>-m-<uuid>`.
+pub const MAX_ID_LEN: usize = 128;
 const USER_PARTITION: &str = "user";
 
 /// Who the call is for. Omitted fields fall back to the server's defaults.
@@ -126,6 +127,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn host_ids_with_uuids_are_accepted_up_to_the_limit() {
+        let ws = "ws-3f2b9c1e-8d4a-4f6b-9e2d-1a7c5b3e9f00";
+        let member = format!("{ws}-m-0b8e6d4c-2a1f-4e3d-8c5b-7a9f1e2d3c4b");
+        assert_eq!(member.len(), 78);
+        let s = Scope::new(ws, Some(member.clone())).unwrap();
+        assert_eq!(s.partition(), format!("project:{member}"));
+        Scope::new(member, None).unwrap();
+        Scope::new("a".repeat(MAX_ID_LEN), None).unwrap();
+        assert!(Scope::new("a".repeat(MAX_ID_LEN + 1), None).is_err());
+        assert!(Scope::new("ws/../x", None).is_err());
+    }
+
+    #[test]
     fn project_scopes_share_the_user_corpus_but_not_partitions_or_trees() {
         let defaults = Scope::new("alex", None).unwrap();
         let a = Scope::resolve(
@@ -146,7 +160,7 @@ mod tests {
 
     #[test]
     fn rejects_ids_that_could_break_out_of_their_namespace() {
-        for bad in ["", "a/b", "a:b", "../x", "-x", &"x".repeat(65)] {
+        for bad in ["", "a/b", "a:b", "../x", "-x", &"x".repeat(MAX_ID_LEN + 1)] {
             assert!(Scope::new(bad, None).is_err(), "{bad:?}");
             assert!(Scope::new("ok", Some(bad.to_string())).is_err(), "{bad:?}");
         }

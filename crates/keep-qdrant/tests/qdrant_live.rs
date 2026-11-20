@@ -28,10 +28,12 @@ async fn qdrant_round_trip_with_namespace_isolation() {
             VectorPoint {
                 id: "a1".into(),
                 vector: vec![1.0, 0.0, 0.0],
+                tags: vec!["s1".into()],
             },
             VectorPoint {
                 id: "a2".into(),
                 vector: vec![0.0, 1.0, 0.0],
+                tags: vec!["s2".into()],
             },
         ],
     )
@@ -43,6 +45,7 @@ async fn qdrant_round_trip_with_namespace_isolation() {
         &[VectorPoint {
             id: "b1".into(),
             vector: vec![1.0, 0.0, 0.0],
+            tags: vec![],
         }],
     )
     .await
@@ -54,6 +57,39 @@ async fn qdrant_round_trip_with_namespace_isolation() {
     assert_eq!(
         hits.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(),
         ["a1", "a2"]
+    );
+    // The tag filter applies before the limit: the farther point is found.
+    let tagged = idx
+        .search_tagged(&col, "conv-a", &[0.9, 0.1, 0.0], 1, &["s2".into()])
+        .await
+        .unwrap();
+    assert_eq!(
+        tagged.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(),
+        ["a2"]
+    );
+    assert!(
+        idx.search_tagged(&col, "conv-b", &[1.0, 0.0, 0.0], 5, &["s1".into()])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // Re-upserting replaces the tags.
+    idx.upsert(
+        &col,
+        "conv-a",
+        &[VectorPoint {
+            id: "a1".into(),
+            vector: vec![1.0, 0.0, 0.0],
+            tags: vec!["s2".into()],
+        }],
+    )
+    .await
+    .unwrap();
+    assert!(
+        idx.search_tagged(&col, "conv-a", &[1.0, 0.0, 0.0], 5, &["s1".into()])
+            .await
+            .unwrap()
+            .is_empty()
     );
     assert!(idx.ensure_collection(&col, 4).await.is_err());
     idx.delete_namespace(&col, "conv-a").await.unwrap();
