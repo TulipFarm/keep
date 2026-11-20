@@ -4,6 +4,8 @@ Thanks for your interest. Keep is early and research-driven, so the most
 useful contributions right now are to the benchmark harness: bugs in loaders,
 metrics or statistics, new baselines, and honest reports of results.
 
+Project links: [website](https://keep.tulipfarm.ai), [GitHub](https://github.com/TulipFarm/keep), [TulipFarm](https://tulipfarm.ai).
+
 ## Workflow
 
 1. Open an issue first for anything larger than a small fix, so we can agree

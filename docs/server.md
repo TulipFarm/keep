@@ -3,6 +3,8 @@
 `keep` serves Keep's Memory and Knowledge to coding agents. Claude Code,
 Codex, Copilot CLI and any other MCP client can share one memory per project.
 
+[Website](https://keep.tulipfarm.ai) · [GitHub](https://github.com/TulipFarm/keep) · [TulipFarm](https://tulipfarm.ai)
+
 It has two transports over one service layer, so both behave the same way:
 
 - **MCP over stdio** (`keep mcp`). This is how coding agents connect.

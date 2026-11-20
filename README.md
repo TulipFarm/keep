@@ -1,3 +1,25 @@
+<p align="center">
+  <a href="https://keep.tulipfarm.ai"><img src="docs/assets/banner.svg" alt="Keep: memory your agents can't quietly rewrite" width="100%"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/TulipFarm/keep/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/TulipFarm/keep/ci.yml?branch=main&label=CI&style=flat-square"></a>
+  <a href="https://github.com/TulipFarm/keep/actions/workflows/image.yml"><img alt="Image" src="https://img.shields.io/github/actions/workflow/status/TulipFarm/keep/image.yml?branch=main&label=image&style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-0a0a0a?style=flat-square"></a>
+  <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-dea584?style=flat-square&logo=rust&logoColor=white">
+  <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-0a0a0a?style=flat-square">
+  <img alt="Status: research preview" src="https://img.shields.io/badge/status-research%20preview-e5311d?style=flat-square">
+  <a href="https://github.com/TulipFarm/keep/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/TulipFarm/keep?style=flat-square&logo=github"></a>
+</p>
+
+<p align="center">
+  <a href="https://keep.tulipfarm.ai"><b>Website</b></a> ·
+  <a href="docs/server.md">Docs</a> ·
+  <a href="https://github.com/TulipFarm/keep">GitHub</a> ·
+  <a href="https://github.com/TulipFarm/keep/issues">Issues</a> ·
+  <a href="https://tulipfarm.ai">TulipFarm</a>
+</p>
+
 # Keep
 
 Keep is an open-source memory and knowledge system for AI agents, written in
@@ -9,6 +31,19 @@ Rust. It is built around two primitives:
 - **Knowledge** — an append-only record of what happened (episodes) and the
   facts derived from it, searchable on demand. Facts keep their provenance and
   validity over time instead of being silently overwritten.
+
+## Quick start
+
+```sh
+curl -fsSL https://keep.tulipfarm.ai/install.sh | sh
+```
+
+The script asks which local database to use (in memory, Postgres + pgvector,
+or Postgres + Qdrant), builds Keep and connects Claude Code, Codex and Copilot
+CLI. Prefer to let your agent do it? Tell it:
+`Install https://keep.tulipfarm.ai/install.md`. For a container, use
+`ghcr.io/tulipfarm/keep`. See [Connecting coding agents](#connecting-coding-agents)
+for the manual steps.
 
 ## Status: research first
 
@@ -139,6 +174,13 @@ security and copy-paste client configuration.
 
 See [docs/benchmarks/methodology.md](docs/benchmarks/methodology.md) for how
 runs are designed, what the numbers mean and what they cannot tell you.
+
+## Links
+
+- Website: <https://keep.tulipfarm.ai>
+- Source: <https://github.com/TulipFarm/keep>
+- Docs: [Server](docs/server.md), [Memory](docs/memory.md), [Knowledge](docs/knowledge.md), [Benchmark methodology](docs/benchmarks/methodology.md)
+- Built by [TulipFarm](https://tulipfarm.ai)
 
 ## Licence
 

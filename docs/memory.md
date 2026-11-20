@@ -1,5 +1,7 @@
 # Memory
 
+[Keep](https://keep.tulipfarm.ai) · [GitHub](https://github.com/TulipFarm/keep) · [TulipFarm](https://tulipfarm.ai)
+
 Memory is the part of Keep that an agent reads at the start of every
 session. It is a small notebook of Markdown files: who the user is, how they
 like to work, what a project has decided. People and agents edit the same
