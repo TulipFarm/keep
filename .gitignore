@@ -9,3 +9,6 @@
 /.keep-models/
 /data
 /.keep-cache/
+
+# Local planning notes
+/docs/plans/

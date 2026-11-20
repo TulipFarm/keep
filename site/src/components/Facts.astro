@@ -1,0 +1,17 @@
+---
+import { facts } from "../data/site";
+const { count = 3 } = Astro.props;
+---
+
+<div class="facts" style="display:grid;gap:18px">
+  {facts.slice(0, count).map((f) => (
+    <div class="card fact">
+      <span class="old">{f.old}</span>
+      <span class="stamp">Superseded</span>
+      <span class="when">{f.oldWhen}</span>
+      <span class="new">{f.now}</span>
+      <span class="when">{f.nowWhen}</span>
+    </div>
+  ))}
+  <p class="muted" style="font-size:.8rem">Example facts. An invented project.</p>
+</div>
