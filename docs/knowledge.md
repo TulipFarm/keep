@@ -1,5 +1,7 @@
 # Knowledge
 
+[Keep](https://keep.tulipfarm.ai) · [GitHub](https://github.com/TulipFarm/keep) · [TulipFarm](https://tulipfarm.ai)
+
 Knowledge is the part of Keep that remembers what happened and what was
 learned from it. It is searched on demand, unlike Memory files, which an
 agent reads at the start of every session. The code lives in

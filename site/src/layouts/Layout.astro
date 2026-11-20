@@ -5,7 +5,7 @@ import "@fontsource-variable/geist-mono";
 import "../styles/global.css";
 import inter from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
 import mono from "@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2?url";
-import { meta, footer, repo, faq } from "../data/site";
+import { meta, footer, repo, docs, faq } from "../data/site";
 
 const { noindex = false } = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
@@ -59,7 +59,7 @@ const graph = {
     <footer class="site-footer">
       <div class="wrap" style="display:flex;flex-wrap:wrap;gap:12px 32px;justify-content:space-between">
         <p>{footer}</p>
-        <p><a href={repo}>GitHub</a> · <a href="https://tulipfarm.ai">TulipFarm</a></p>
+        <p><a href={repo}>GitHub</a> · <a href={docs.server}>Docs</a> · <a href={docs.issues}>Issues</a> · <a href="/llms.txt">llms.txt</a> · <a href="https://tulipfarm.ai">TulipFarm</a></p>
       </div>
     </footer>
   </body>

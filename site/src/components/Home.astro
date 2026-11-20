@@ -36,6 +36,11 @@ const first = day("2026-05-01");
         <a class="btn" href={docs.server}>{hero.secondary}</a>
         <button type="button" class="btn" id="copy" aria-label="Copy setup prompt" data-prompt={setupPrompt}>{hero.copy}</button>
         <p class="note">{hero.note}</p>
+        <p class="badges">
+          <a href={`${repo}/stargazers`}><img alt="GitHub stars" height="20" src="https://img.shields.io/github/stars/TulipFarm/keep?style=flat-square&logo=github" /></a>
+          <a href={`${repo}/actions/workflows/ci.yml`}><img alt="CI status" height="20" src="https://img.shields.io/github/actions/workflow/status/TulipFarm/keep/ci.yml?branch=main&label=CI&style=flat-square" /></a>
+          <img alt="Licence: Apache-2.0" height="20" src="https://img.shields.io/badge/license-Apache--2.0-0a0a0a?style=flat-square" />
+        </p>
       </div>
     </div>
   </section>
@@ -236,6 +241,8 @@ const first = day("2026-05-01");
   .ww { display: grid; gap: 10px; padding: 28px 0 8px; font-size: .95rem; }
   .ww p { margin: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .ww b { font: 700 .8rem var(--font-mono); text-transform: uppercase; margin-right: 8px; min-width: 7.5em; }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+  .badges img { display: block; }
   .exlabel { font: 700 .72rem var(--font-mono); text-transform: uppercase; letter-spacing: .08em; background: #dcff5a; justify-self: start; padding: 2px 8px; margin: 0; }
   .lg { display: inline-flex; font-size: 1.05em; margin-right: 7px; vertical-align: -.14em; }
   .lg :global(svg) { width: 1.1em; height: 1.1em; }
