@@ -1,0 +1,30 @@
+---
+import { revisions } from "../data/site";
+import { revAgents } from "../data/timeline";
+---
+
+<div class="memfile" data-active="3" aria-label="Example memory file, three revisions">
+  <div class="tabs" role="tablist">
+    {revisions.map((_, i) => (
+      <button role="tab" type="button" data-tab={i + 1} data-agent={revAgents[i]} aria-selected={i === 2 ? "true" : "false"}>r{i + 1}<small> {revAgents[i]}</small></button>
+    ))}
+  </div>
+  <div class="body">
+    {revisions.map((lines, i) => (
+      <div data-rev={i + 1}>
+        {lines.map(([k, t]) => <span class:list={["ln", k]}>{t}</span>)}
+      </div>
+    ))}
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLElement>(".memfile").forEach((root) => {
+    root.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((b) =>
+      b.addEventListener("click", () => {
+        root.dataset.active = b.dataset.tab;
+        root.querySelectorAll("[data-tab]").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+      }),
+    );
+  });
+</script>

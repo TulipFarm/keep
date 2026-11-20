@@ -1,0 +1,66 @@
+---
+import "@fontsource-variable/newsreader";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/geist-mono";
+import "../styles/global.css";
+import inter from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
+import mono from "@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2?url";
+import { meta, footer, repo, faq } from "../data/site";
+
+const { noindex = false } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const og = new URL("/og.png", Astro.site).href;
+const clean = (t: string) => t.replace(/`/g, "");
+const licence = "https://www.apache.org/licenses/LICENSE-2.0";
+const graph = {
+  "@context": "https://schema.org",
+  "@graph": [
+    { "@type": "Organization", "@id": "https://tulipfarm.ai/#organization", name: "TulipFarm", url: "https://tulipfarm.ai/" },
+    { "@type": "WebSite", "@id": "https://keep.tulipfarm.ai/#website", url: "https://keep.tulipfarm.ai/", name: "Keep", publisher: { "@id": "https://tulipfarm.ai/#organization" } },
+    { "@type": "SoftwareApplication", "@id": "https://keep.tulipfarm.ai/#software", name: "Keep", alternateName: "Keep by TulipFarm", description: meta.description, url: "https://keep.tulipfarm.ai/", applicationCategory: "DeveloperApplication", license: licence, author: { "@id": "https://tulipfarm.ai/#organization" } },
+    { "@type": "SoftwareSourceCode", name: "Keep", codeRepository: repo, programmingLanguage: "Rust", license: licence, about: { "@id": "https://keep.tulipfarm.ai/#software" } },
+    { "@type": "FAQPage", "@id": "https://keep.tulipfarm.ai/#faq", mainEntity: faq.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: clean(a) } })) },
+  ],
+};
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{meta.title}</title>
+    <meta name="description" content={meta.description} />
+    <meta property="og:title" content={meta.title} />
+    <meta property="og:description" content={meta.description} />
+    <meta name="theme-color" content="#f6f6f1" />
+    {noindex && <meta name="robots" content="noindex" />}
+    <link rel="canonical" href={canonical} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Keep" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={og} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Keep: open-source memory for AI agents" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={meta.title} />
+    <meta name="twitter:description" content={meta.description} />
+    <meta name="twitter:image" content={og} />
+    <link rel="alternate" type="text/markdown" href="/index.md" />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href={inter} />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href={mono} />
+    <script type="application/ld+json" set:html={JSON.stringify(graph).replace(/</g, "\\u003c")} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <main id="main"><slot /></main>
+    <footer class="site-footer">
+      <div class="wrap" style="display:flex;flex-wrap:wrap;gap:12px 32px;justify-content:space-between">
+        <p>{footer}</p>
+        <p><a href={repo}>GitHub</a> · <a href="https://tulipfarm.ai">TulipFarm</a></p>
+      </div>
+    </footer>
+  </body>
+</html>

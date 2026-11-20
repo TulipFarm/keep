@@ -1,0 +1,8 @@
+---
+import { hero } from "../data/site";
+---
+
+<div>
+  <p class="eyebrow" style="margin-bottom:8px">{hero.snippetLabel}</p>
+  <pre class="term"><code>{hero.snippet.map((l) => (<Fragment><span class="p">$ </span>{l}{"\n"}</Fragment>))}</code></pre>
+</div>
