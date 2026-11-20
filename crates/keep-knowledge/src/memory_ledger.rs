@@ -164,21 +164,34 @@ impl State {
     }
 
     fn entity_with_aliases(&self, e: &Entity) -> Entity {
-        let mut e = e.clone();
-        e.aliases = self
-            .aliases
+        self.entity_with_aliases_from(e, None)
+    }
+
+    /// Aliases of `e`; with `sources`, only those stated by one of them.
+    fn aliases_of(&self, e: &Entity, sources: Option<&[String]>) -> BTreeSet<String> {
+        self.aliases
             .get(&key(&e.corpus, &e.id))
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
+            .map(|m| {
+                m.iter()
+                    .filter(|(_, by)| sources.is_none_or(|s| by.iter().any(|x| s.contains(x))))
+                    .map(|(a, _)| a.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn entity_with_aliases_from(&self, e: &Entity, sources: Option<&[String]>) -> Entity {
+        let mut e = e.clone();
+        e.aliases = self.aliases_of(&e, sources);
         e
     }
 
-    fn entity_matches(&self, e: &Entity, normalized: &str) -> bool {
+    fn entity_matches(&self, e: &Entity, normalized: &str, sources: Option<&[String]>) -> bool {
         normalize_name(&e.name) == normalized
             || self
-                .aliases
-                .get(&key(&e.corpus, &e.id))
-                .is_some_and(|m| m.keys().any(|a| normalize_name(a) == normalized))
+                .aliases_of(e, sources)
+                .iter()
+                .any(|a| normalize_name(a) == normalized)
     }
 }
 
@@ -358,7 +371,7 @@ impl Ledger for MemoryLedger {
         Ok(s.entities
             .values()
             .filter(|e| e.corpus == corpus && e.partition == partition)
-            .find(|e| s.entity_matches(e, normalized))
+            .find(|e| s.entity_matches(e, normalized, None))
             .map(|e| s.entity_with_aliases(e)))
     }
 
@@ -367,14 +380,28 @@ impl Ledger for MemoryLedger {
         corpus: &str,
         partitions: &[String],
         normalized: &str,
+        sources: Option<&[String]>,
     ) -> Result<Vec<Entity>> {
         let s = self.lock();
         Ok(s.entities
             .values()
             .filter(|e| e.corpus == corpus && partitions.contains(&e.partition))
-            .filter(|e| s.entity_matches(e, normalized))
-            .map(|e| s.entity_with_aliases(e))
+            .filter(|e| s.entity_matches(e, normalized, sources))
+            .map(|e| s.entity_with_aliases_from(e, sources))
             .collect())
+    }
+
+    async fn aliases_from(
+        &self,
+        corpus: &str,
+        entity_id: &str,
+        sources: &[String],
+    ) -> Result<BTreeSet<String>> {
+        let s = self.lock();
+        Ok(s.entities
+            .get(&key(corpus, entity_id))
+            .map(|e| s.aliases_of(e, Some(sources)))
+            .unwrap_or_default())
     }
 
     async fn current_facts(
@@ -427,7 +454,14 @@ impl Ledger for MemoryLedger {
     async fn apply(&self, c: ChangeSet) -> Result<ApplyOutcome> {
         let mut s = self.lock();
         let corpus = c.corpus.as_str();
-        if !s.episodes.contains_key(&key(corpus, &c.episode_id)) {
+        let current = |id: &str, hash: &str| {
+            s.episodes
+                .get(&key(corpus, id))
+                .is_some_and(|e| e.content_hash == hash)
+        };
+        if !s.episodes.contains_key(&key(corpus, &c.episode_id))
+            || !c.episodes.iter().all(|(id, hash)| current(id, hash))
+        {
             return Ok(ApplyOutcome::EpisodeGone);
         }
         if c.new_facts
@@ -747,7 +781,7 @@ impl Ledger for MemoryLedger {
                     id: e.id.clone(),
                     name: e.name.clone(),
                     kind: e.kind.clone(),
-                    aliases: s.entity_with_aliases(e).aliases.into_iter().collect(),
+                    aliases: s.aliases_of(e, filter).into_iter().collect(),
                     facts: about.len() as i64,
                     sources: srcs.into_iter().collect(),
                 }

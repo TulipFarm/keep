@@ -324,6 +324,8 @@ pub struct ExternalClaim {
 /// One evidence span to record for a planned claim.
 struct Span {
     episode_id: String,
+    /// Content hash of the episode when it was read.
+    content_hash: String,
     source_id: String,
     start: i32,
     end: i32,
@@ -859,52 +861,67 @@ impl Knowledge {
         };
         let t = timing::span("knowledge.projection_read").items(jobs.len());
         let targets: Vec<String> = jobs.iter().map(|j| j.target.clone()).collect();
-        let items: Vec<(String, Projection)> = targets
+        let mut items: Vec<(String, Projection)> = targets
             .iter()
             .cloned()
             .zip(self.ledger.projections(corpus, &targets).await?)
             .filter_map(|(id, p)| p.map(|p| (id, p)))
             .collect();
         drop(t);
+        for _ in 0..3 {
+            if items.is_empty() {
+                return Ok(());
+            }
+            self.ensure_collection().await?;
+            let texts: Vec<String> = items.iter().map(|(_, p)| p.text.clone()).collect();
+            let t = timing::span("knowledge.embed").items(texts.len());
+            let vectors = self.embedder.embed(&texts).await?.vectors;
+            drop(t);
+            let mut by_ns: BTreeMap<String, Vec<VectorPoint>> = BTreeMap::new();
+            for ((id, p), vector) in items.iter().zip(vectors) {
+                by_ns
+                    .entry(namespace(corpus, &p.partition))
+                    .or_default()
+                    .push(VectorPoint {
+                        id: id.clone(),
+                        vector,
+                        tags: p.sources.iter().map(|x| source_tag(corpus, x)).collect(),
+                    });
+            }
+            for (ns, points) in &by_ns {
+                let _t = timing::span("knowledge.vector_upsert").items(points.len());
+                index.upsert(&self.config.collection, ns, points).await?;
+            }
+            // A purge may have run while we embedded; never leave its
+            // vectors. A replacement may have changed an item's text or
+            // sources; embed it again so a stale vector never wins.
+            let _t = timing::span("knowledge.projection_recheck").items(items.len());
+            let ids: Vec<String> = items.iter().map(|(id, _)| id.clone()).collect();
+            let still = self.ledger.projections(corpus, &ids).await?;
+            let mut changed = Vec::new();
+            for ((id, p), now) in items.iter().zip(still) {
+                match now {
+                    None => {
+                        index
+                            .delete_points(
+                                &self.config.collection,
+                                &namespace(corpus, &p.partition),
+                                std::slice::from_ref(id),
+                            )
+                            .await?;
+                    }
+                    Some(now) if now != *p => changed.push((id.clone(), now)),
+                    Some(_) => {}
+                }
+            }
+            items = changed;
+        }
         if items.is_empty() {
             return Ok(());
         }
-        self.ensure_collection().await?;
-        let texts: Vec<String> = items.iter().map(|(_, p)| p.text.clone()).collect();
-        let t = timing::span("knowledge.embed").items(texts.len());
-        let vectors = self.embedder.embed(&texts).await?.vectors;
-        drop(t);
-        let mut by_ns: BTreeMap<String, Vec<VectorPoint>> = BTreeMap::new();
-        for ((id, p), vector) in items.iter().zip(vectors) {
-            by_ns
-                .entry(namespace(corpus, &p.partition))
-                .or_default()
-                .push(VectorPoint {
-                    id: id.clone(),
-                    vector,
-                    tags: p.sources.iter().map(|x| source_tag(corpus, x)).collect(),
-                });
-        }
-        for (ns, points) in &by_ns {
-            let _t = timing::span("knowledge.vector_upsert").items(points.len());
-            index.upsert(&self.config.collection, ns, points).await?;
-        }
-        // A purge may have run while we embedded; never leave its vectors.
-        let _t = timing::span("knowledge.projection_recheck").items(items.len());
-        let ids: Vec<String> = items.iter().map(|(id, _)| id.clone()).collect();
-        let still = self.ledger.projections(corpus, &ids).await?;
-        for ((id, p), now) in items.iter().zip(still) {
-            if now.is_none() {
-                index
-                    .delete_points(
-                        &self.config.collection,
-                        &namespace(corpus, &p.partition),
-                        std::slice::from_ref(id),
-                    )
-                    .await?;
-            }
-        }
-        Ok(())
+        Err(KnowledgeError::Conflict(
+            "items kept changing while projecting".into(),
+        ))
     }
 
     async fn unproject(&self, target: &str) -> Result<()> {
@@ -932,7 +949,8 @@ impl Knowledge {
             }
             let claims = claims_for(&facts);
             if !claims.is_empty() {
-                self.apply_claims(corpus, &sx.evidence_label(), &claims)
+                let seen = HashMap::from([(ep.id.clone(), ep.content_hash.clone())]);
+                self.apply_claims_seen(corpus, &sx.evidence_label(), &claims, &seen)
                     .await?;
             }
             return Ok(());
@@ -968,6 +986,7 @@ impl Knowledge {
                 claim: &c.claim,
                 spans: vec![Span {
                     episode_id: ep.id.clone(),
+                    content_hash: ep.content_hash.clone(),
                     source_id: ep.source_id.clone(),
                     start: c.start as i32,
                     end: c.end as i32,
@@ -995,11 +1014,32 @@ impl Knowledge {
         extractor: &str,
         claims: &[ExternalClaim],
     ) -> Result<usize> {
+        self.apply_claims_seen(corpus, extractor, claims, &HashMap::new())
+            .await
+    }
+
+    /// [`Self::apply_claims`] for claims extracted from episodes with the
+    /// given content hashes: claims citing an episode whose content has
+    /// changed since are skipped, and the write is refused if one changes
+    /// before it commits.
+    async fn apply_claims_seen(
+        &self,
+        corpus: &str,
+        extractor: &str,
+        claims: &[ExternalClaim],
+        seen: &HashMap<String, String>,
+    ) -> Result<usize> {
         let mut episodes: HashMap<String, Option<Episode>> = HashMap::new();
+        let mut changed: BTreeSet<String> = BTreeSet::new();
         for c in claims {
             for id in &c.episodes {
                 if !episodes.contains_key(id) {
                     let ep = self.ledger.episode(corpus, id).await?;
+                    if let (Some(e), Some(h)) = (&ep, seen.get(id))
+                        && e.content_hash != *h
+                    {
+                        changed.insert(id.clone());
+                    }
                     episodes.insert(id.clone(), ep);
                 }
             }
@@ -1007,6 +1047,9 @@ impl Knowledge {
         // Group by anchor episode, keeping first-seen order.
         let mut groups: Vec<(Episode, Vec<Planned>)> = Vec::new();
         for c in claims {
+            if c.episodes.iter().any(|id| changed.contains(id)) {
+                continue;
+            }
             let found: Vec<&Episode> = c
                 .episodes
                 .iter()
@@ -1019,6 +1062,7 @@ impl Knowledge {
                 .iter()
                 .map(|ep| Span {
                     episode_id: ep.id.clone(),
+                    content_hash: ep.content_hash.clone(),
                     source_id: ep.source_id.clone(),
                     start: 0,
                     end: ep.text.chars().count() as i32,
@@ -1072,6 +1116,7 @@ impl Knowledge {
             corpus: corpus.into(),
             partition: part.into(),
             episode_id: ep.id.clone(),
+            episodes: vec![(ep.id.clone(), ep.content_hash.clone())],
             now,
             entities: vec![],
             aliases: vec![],
@@ -1080,6 +1125,12 @@ impl Knowledge {
             versions: vec![],
             jobs: vec![],
         };
+        for sp in claims.iter().flat_map(|c| &c.spans) {
+            if !cs.episodes.iter().any(|(id, _)| *id == sp.episode_id) {
+                cs.episodes
+                    .push((sp.episode_id.clone(), sp.content_hash.clone()));
+            }
+        }
         // normalised name -> (entity id, display name)
         let mut names: HashMap<String, (String, String)> = HashMap::new();
         // Facts touched in this change set, by id, with their latest version.
@@ -1389,6 +1440,24 @@ impl Knowledge {
         })
     }
 
+    /// `f` as this read sees it: only allowed evidence, and versions
+    /// rebuilt without facts the read may not see. See
+    /// [`crate::resolve::restrict`].
+    async fn restricted(&self, scope: &ReadScope, f: &Fact) -> Result<Option<Fact>> {
+        let Some(allowed) = &scope.sources else {
+            return Ok(Some(f.clone()));
+        };
+        if !f.versions.iter().any(|v| v.cause.is_some()) {
+            return Ok(scope.restrict(f).map(std::borrow::Cow::into_owned));
+        }
+        let group = self
+            .ledger
+            .current_facts(&f.corpus, &f.partition, &f.subject, &f.predicate)
+            .await?;
+        let group: Vec<&Fact> = group.iter().collect();
+        Ok(crate::resolve::restrict(f, allowed, &group))
+    }
+
     async fn citation_for_chunk(&self, c: &Chunk) -> Result<Citation> {
         let label = self.source_label(&c.corpus, &c.source_id).await?;
         Ok(chunk_citation(c, label))
@@ -1524,7 +1593,9 @@ impl Knowledge {
                     if !req.access.allows(&f.partition) {
                         continue;
                     }
-                    let Some(f) = scope.restrict(f) else { continue };
+                    let Some(f) = self.restricted(&scope, f).await? else {
+                        continue;
+                    };
                     let Some(hit) = self.fact_hit(&item, score, &f, req.as_of).await? else {
                         continue;
                     };
@@ -1681,7 +1752,13 @@ impl Knowledge {
                 }
                 None => {
                     let f = &snap.facts[i as usize - snap.chunks.len()];
-                    let Some(f) = scope.restrict(f) else { continue };
+                    let f = match &scope.sources {
+                        Some(allowed) => match snap.restricted(f, allowed) {
+                            Some(f) => std::borrow::Cow::Owned(f),
+                            None => continue,
+                        },
+                        None => std::borrow::Cow::Borrowed(f),
+                    };
                     let Some(hit) = self.fact_hit(&item, score, &f, req.as_of).await? else {
                         continue;
                     };
@@ -1775,10 +1852,10 @@ impl Knowledge {
                     .pop()
                     .filter(|f| access.allows(&f.partition))
                     .ok_or(KnowledgeError::NotFound)?;
-                let f = scope
-                    .restrict(&f)
-                    .ok_or(KnowledgeError::NotFound)?
-                    .into_owned();
+                let f = self
+                    .restricted(&scope, &f)
+                    .await?
+                    .ok_or(KnowledgeError::NotFound)?;
                 let view = fact_as_of(&f, as_of).ok_or(KnowledgeError::NotFound)?;
                 let summary = summary_of(&view.version, view.valid);
                 let mut text = render_fact(&f.text, &summary);
@@ -1895,14 +1972,34 @@ impl Knowledge {
         let depth = depth.clamp(1, 2);
         let fanout = fanout.clamp(1, 25);
         let max_nodes = self.config.max_traverse_nodes;
+        let norm = normalize_name(start);
         let mut frontier: Vec<Entity> = match self.ledger.entity(corpus, start).await? {
             Some(e) if access.allows(&e.partition) => vec![e],
             _ => {
                 self.ledger
-                    .entities_named(corpus, parts, &normalize_name(start))
+                    .entities_named(corpus, parts, &norm, scope.list.as_deref())
                     .await?
             }
         };
+        if let Some(list) = &scope.list {
+            // Under an allowlist an entity exists only through allowed
+            // sources: an alias they state, or a fact they support.
+            let mut kept = Vec::new();
+            for mut e in frontier {
+                e.aliases = self.ledger.aliases_from(corpus, &e.id, list).await?;
+                let named = e.aliases.iter().any(|a| normalize_name(a) == norm);
+                if named
+                    || !self
+                        .ledger
+                        .facts_about(corpus, parts, &e.id, 1, Some(list))
+                        .await?
+                        .is_empty()
+                {
+                    kept.push(e);
+                }
+            }
+            frontier = kept;
+        }
         let mut seen: BTreeSet<String> = frontier.iter().map(|e| e.id.clone()).collect();
         let mut edge_ids = BTreeSet::new();
         out.nodes.extend(frontier.iter().cloned());
@@ -1920,7 +2017,7 @@ impl Knowledge {
                     if !access.allows(&f.partition) {
                         continue;
                     }
-                    let Some(f) = scope.restrict(&f) else {
+                    let Some(f) = self.restricted(&scope, &f).await? else {
                         continue;
                     };
                     let Some(view) = fact_as_of(&f, as_of) else {
@@ -1947,9 +2044,12 @@ impl Knowledge {
                             out.truncated = true;
                             continue;
                         }
-                        if let Some(n) = self.ledger.entity(corpus, &other).await?
+                        if let Some(mut n) = self.ledger.entity(corpus, &other).await?
                             && access.allows(&n.partition)
                         {
+                            if let Some(list) = &scope.list {
+                                n.aliases = self.ledger.aliases_from(corpus, &n.id, list).await?;
+                            }
                             seen.insert(other);
                             out.nodes.push(n.clone());
                             next.push(n);

@@ -6,6 +6,8 @@
 //! with optimistic checks, so concurrent workers or a purge in between make
 //! the write fail cleanly instead of resurrecting deleted data.
 
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -89,8 +91,13 @@ pub struct VersionWrite {
 pub struct ChangeSet {
     pub corpus: String,
     pub partition: String,
-    /// The write is refused if this episode no longer exists.
+    /// The episode the change was planned from.
     pub episode_id: String,
+    /// Every episode the change cites, with the content hash it was read
+    /// at. The write is refused ([`ApplyOutcome::EpisodeGone`]) if any of
+    /// them no longer exists or now holds other content, such as after a
+    /// source was replaced by a new revision while it was being extracted.
+    pub episodes: Vec<(String, String)>,
     pub now: Time,
     pub entities: Vec<EntityWrite>,
     pub aliases: Vec<AliasWrite>,
@@ -115,7 +122,7 @@ impl ChangeSet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApplyOutcome {
     Applied,
-    /// The episode was purged meanwhile; nothing was written.
+    /// A cited episode was purged or replaced meanwhile; nothing was written.
     EpisodeGone,
     /// A fact or version changed meanwhile; re-plan and retry.
     Conflict,
@@ -200,13 +207,22 @@ pub trait Ledger: Send + Sync {
         partition: &str,
         normalized: &str,
     ) -> Result<Option<Entity>>;
-    /// Entities in any of `partitions` whose name or alias matches.
+    /// Entities in any of `partitions` whose name or alias matches. With
+    /// `sources`, only aliases stated by those sources match or are returned.
     async fn entities_named(
         &self,
         corpus: &str,
         partitions: &[String],
         normalized: &str,
+        sources: Option<&[String]>,
     ) -> Result<Vec<Entity>>;
+    /// An entity's aliases stated by any of `sources`.
+    async fn aliases_from(
+        &self,
+        corpus: &str,
+        entity_id: &str,
+        sources: &[String],
+    ) -> Result<BTreeSet<String>>;
     /// Facts with a current version whose subject and predicate match.
     async fn current_facts(
         &self,

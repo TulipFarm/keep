@@ -24,6 +24,8 @@ pub(crate) struct Snapshot {
     pub key: Vec<(String, i64)>,
     pub chunks: Vec<Chunk>,
     pub facts: Vec<Fact>,
+    /// Facts by partition, subject and predicate, for restricted reads.
+    groups: HashMap<(String, String, String), Vec<usize>>,
     indexes: Mutex<VecDeque<(Vec<u32>, Arc<Bm25Index>)>>,
 }
 
@@ -41,10 +43,18 @@ impl Snapshot {
     pub fn new(key: Vec<(String, i64)>, mut chunks: Vec<Chunk>, mut facts: Vec<Fact>) -> Self {
         chunks.sort_by(|a, b| a.id.cmp(&b.id));
         facts.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
+        for (i, f) in facts.iter().enumerate() {
+            groups
+                .entry((f.partition.clone(), f.subject.clone(), f.predicate.clone()))
+                .or_default()
+                .push(i);
+        }
         Self {
             key,
             chunks,
             facts,
+            groups,
             indexes: Mutex::new(VecDeque::new()),
         }
     }
@@ -55,6 +65,18 @@ impl Snapshot {
             Some(c) => &c.id,
             None => &self.facts[i - self.chunks.len()].id,
         }
+    }
+
+    /// `f` as a read limited to `allowed` sources sees it; see
+    /// [`crate::resolve::restrict`].
+    pub fn restricted(&self, f: &Fact, allowed: &BTreeSet<String>) -> Option<Fact> {
+        let key = (f.partition.clone(), f.subject.clone(), f.predicate.clone());
+        let group: Vec<&Fact> = self
+            .groups
+            .get(&key)
+            .map(|ix| ix.iter().map(|&i| &self.facts[i]).collect())
+            .unwrap_or_default();
+        crate::resolve::restrict(f, allowed, &group)
     }
 
     /// With `sources`, only chunks of those sources and facts with evidence
@@ -85,11 +107,9 @@ impl Snapshot {
             let shown = match sources {
                 None => fact_as_of(f, as_of).is_some(),
                 Some(s) => {
-                    let mut only = f.clone();
-                    only.evidence.retain(|e| s.contains(&e.source_id));
-                    if only.evidence.is_empty() {
+                    let Some(only) = self.restricted(f, s) else {
                         continue;
-                    }
+                    };
                     fact_as_of(&only, as_of).is_some()
                 }
             };

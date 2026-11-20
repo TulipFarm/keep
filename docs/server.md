@@ -353,8 +353,17 @@ a forget receipt; use `knowledge_forget_source` to erase a source.
   allowlist still gets a full page of results.
 - A fact supported by several sources is returned when at least one of them
   is allowed, and shows only the allowed evidence.
+- Results read as if the other sources did not exist. A fact superseded
+  only by a fact from a disallowed source stays active, with no `valid_to`
+  or version caused by it, including for `valid_at` reads. Entity aliases
+  in `knowledge_index` and `knowledge_traverse` come only from allowed
+  sources, and an alias known only from a disallowed source does not start
+  a traversal.
 - `knowledge_fetch` or `knowledge_cite` of an id outside the allowlist fails
   with the same `not_found` error as an id that does not exist.
+- `knowledge_summarize` takes the same lists for `source_id`: a source
+  outside them is `not_found`. They do not apply to `text` or `episodes`,
+  which the caller supplies.
 - The lists narrow what the scope can already read; they never widen it.
 
 Vectors written before this release carry no source tags, so the vector

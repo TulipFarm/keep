@@ -871,8 +871,9 @@ impl KeepService {
 
     pub async fn knowledge_summarize(&self, req: KnowledgeSummarizeReq) -> Result<Value, ApiError> {
         let scope = self.scope(req.scope.as_ref())?;
+        let access = read_access(&scope, req.source_ids, req.collections)?;
         let session = match (req.source_id, req.text, req.episodes) {
-            (Some(id), None, None) => self.source_session(&scope, &id).await?,
+            (Some(id), None, None) => self.source_session(&scope, &access, &id).await?,
             (None, Some(text), None) => SessionInput {
                 id: "text".into(),
                 date: None,
@@ -945,13 +946,19 @@ impl KeepService {
         }))
     }
 
-    /// A readable source's episodes as one session, or not found.
-    async fn source_session(&self, scope: &Scope, id: &str) -> Result<SessionInput, ApiError> {
+    /// A source's episodes as one session, or not found when `access` may
+    /// not read it.
+    async fn source_session(
+        &self,
+        scope: &Scope,
+        access: &Access,
+        id: &str,
+    ) -> Result<SessionInput, ApiError> {
         let corpus = scope.corpus();
         let not_found = || ApiError::not_found(format!("source {id:?}"));
         let ledger = self.knowledge.ledger();
         match ledger.source(&corpus, id).await? {
-            Some(s) if scope.access().allows(&s.partition) => {}
+            Some(s) if access.allows_source(&s) => {}
             _ => return Err(not_found()),
         }
         let episodes = ledger.source_episodes(&corpus, id).await?;

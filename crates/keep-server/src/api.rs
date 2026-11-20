@@ -471,6 +471,15 @@ pub struct KnowledgeSummarizeReq {
     /// Conversation turns to summarize. At most 200.
     #[serde(default)]
     pub episodes: Option<Vec<EpisodeArg>>,
+    /// With `source_id`, the source must be one of these ids, else it is
+    /// not found. An empty list matches nothing. At most 1000 ids.
+    #[serde(default)]
+    pub source_ids: Option<Vec<String>>,
+    /// With `source_id`, the source must belong to one of these
+    /// collections, else it is not found. Combined with `source_ids`, it
+    /// must match both. An empty list matches nothing.
+    #[serde(default)]
+    pub collections: Option<Vec<String>>,
 }
 
 /// One tool, exposed as an MCP tool and as `POST /v1/{area}/{op}`.

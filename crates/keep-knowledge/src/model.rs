@@ -84,6 +84,17 @@ impl Access {
         self.partitions.contains(partition)
     }
 
+    /// Whether a read may see this source: its partition is readable and it
+    /// passes any source and collection allowlist.
+    pub fn allows_source(&self, s: &Source) -> bool {
+        self.allows(&s.partition)
+            && self.sources.as_ref().is_none_or(|ids| ids.contains(&s.id))
+            && self
+                .collections
+                .as_ref()
+                .is_none_or(|cols| cols.contains(&s.collection))
+    }
+
     pub fn labels(&self) -> Vec<String> {
         self.partitions.iter().cloned().collect()
     }

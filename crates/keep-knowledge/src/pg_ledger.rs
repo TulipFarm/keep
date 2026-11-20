@@ -251,7 +251,12 @@ async fn load_facts<C: GenericClient>(c: &C, corpus: &str, ids: &[String]) -> Re
     Ok(ids.iter().filter_map(|id| facts.remove(id)).collect())
 }
 
-async fn load_entity<C: GenericClient>(c: &C, corpus: &str, id: &str) -> Result<Option<Entity>> {
+async fn load_entity<C: GenericClient>(
+    c: &C,
+    corpus: &str,
+    id: &str,
+    sources: Option<&[String]>,
+) -> Result<Option<Entity>> {
     let Some(r) = c
         .query_opt(
             "SELECT * FROM knowledge_entities WHERE corpus = $1 AND id = $2",
@@ -264,8 +269,9 @@ async fn load_entity<C: GenericClient>(c: &C, corpus: &str, id: &str) -> Result<
     };
     let aliases = c
         .query(
-            "SELECT DISTINCT alias FROM knowledge_entity_aliases WHERE corpus = $1 AND entity_id = $2",
-            &[&corpus, &id],
+            "SELECT DISTINCT alias FROM knowledge_entity_aliases
+             WHERE corpus = $1 AND entity_id = $2 AND ($3::text[] IS NULL OR source_id = ANY($3))",
+            &[&corpus, &id, &sources],
         )
         .await
         .map_err(db)?
@@ -630,7 +636,7 @@ impl Ledger for PgLedger {
 
     async fn entity(&self, corpus: &str, id: &str) -> Result<Option<Entity>> {
         let c = self.client().await?;
-        load_entity(&*c, corpus, id).await
+        load_entity(&*c, corpus, id, None).await
     }
 
     async fn find_entity(
@@ -654,7 +660,7 @@ impl Ledger for PgLedger {
             .map_err(db)?
             .map(|r| r.get(0));
         match id {
-            Some(id) => load_entity(&*c, corpus, &id).await,
+            Some(id) => load_entity(&*c, corpus, &id, None).await,
             None => Ok(None),
         }
     }
@@ -664,6 +670,7 @@ impl Ledger for PgLedger {
         corpus: &str,
         partitions: &[String],
         normalized: &str,
+        sources: Option<&[String]>,
     ) -> Result<Vec<Entity>> {
         let c = self.client().await?;
         let ids: Vec<String> = c
@@ -672,9 +679,10 @@ impl Ledger for PgLedger {
                  WHERE en.corpus = $1 AND en.partition_label = ANY($2)
                    AND (en.norm_name = $3 OR EXISTS (
                      SELECT 1 FROM knowledge_entity_aliases a
-                     WHERE a.corpus = en.corpus AND a.entity_id = en.id AND a.norm_alias = $3))
+                     WHERE a.corpus = en.corpus AND a.entity_id = en.id AND a.norm_alias = $3
+                       AND ($4::text[] IS NULL OR a.source_id = ANY($4))))
                  ORDER BY en.id",
-                &[&corpus, &partitions, &normalized],
+                &[&corpus, &partitions, &normalized, &sources],
             )
             .await
             .map_err(db)?
@@ -683,11 +691,30 @@ impl Ledger for PgLedger {
             .collect();
         let mut out = Vec::new();
         for id in ids {
-            if let Some(e) = load_entity(&*c, corpus, &id).await? {
+            if let Some(e) = load_entity(&*c, corpus, &id, sources).await? {
                 out.push(e);
             }
         }
         Ok(out)
+    }
+
+    async fn aliases_from(
+        &self,
+        corpus: &str,
+        entity_id: &str,
+        sources: &[String],
+    ) -> Result<BTreeSet<String>> {
+        let c = self.client().await?;
+        Ok(c.query(
+            "SELECT DISTINCT alias FROM knowledge_entity_aliases
+             WHERE corpus = $1 AND entity_id = $2 AND source_id = ANY($3)",
+            &[&corpus, &entity_id, &sources],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect())
     }
 
     async fn current_facts(
@@ -749,16 +776,27 @@ impl Ledger for PgLedger {
         let mut c = self.client().await?;
         let tx = c.transaction().await.map_err(db)?;
         let corpus = cs.corpus.as_str();
-        // Holding a share lock on the episode makes a concurrent purge wait
-        // for this transaction, then delete what it wrote.
-        if tx
-            .query_opt(
-                "SELECT 1 FROM knowledge_episodes WHERE corpus = $1 AND id = $2 FOR SHARE",
-                &[&corpus, &cs.episode_id],
+        // Holding a share lock on the cited episodes makes a concurrent
+        // purge or replacement wait for this transaction, then delete what
+        // it wrote. Content hashes catch a replacement that already ran.
+        let mut ids: Vec<&str> = vec![cs.episode_id.as_str()];
+        ids.extend(cs.episodes.iter().map(|(id, _)| id.as_str()));
+        let found: BTreeMap<String, String> = tx
+            .query(
+                "SELECT id, content_hash FROM knowledge_episodes
+                 WHERE corpus = $1 AND id = ANY($2) ORDER BY id FOR SHARE",
+                &[&corpus, &ids],
             )
             .await
             .map_err(db)?
-            .is_none()
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        if !found.contains_key(&cs.episode_id)
+            || !cs
+                .episodes
+                .iter()
+                .all(|(id, hash)| found.get(id) == Some(hash))
         {
             return Ok(ApplyOutcome::EpisodeGone);
         }
@@ -1191,7 +1229,8 @@ impl Ledger for PgLedger {
             .query(
                 "SELECT en.id, en.name, en.kind,
                    COALESCE((SELECT array_agg(DISTINCT a.alias) FROM knowledge_entity_aliases a
-                             WHERE a.corpus = en.corpus AND a.entity_id = en.id), '{}'::text[]),
+                             WHERE a.corpus = en.corpus AND a.entity_id = en.id
+                               AND ($3::text[] IS NULL OR a.source_id = ANY($3))), '{}'::text[]),
                    (SELECT count(*) FROM knowledge_facts f
                     WHERE f.corpus = en.corpus AND f.partition_label = en.partition_label
                       AND (f.subject = en.id OR f.object_entity = en.id)

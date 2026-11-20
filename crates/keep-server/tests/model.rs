@@ -124,6 +124,31 @@ async fn a_configured_model_extracts_facts_and_summarizes() {
         assert_eq!(e.code, ErrorCode::NotFound);
         assert_eq!(e.message, format!("source {id:?}"));
     }
+
+    // So does a source outside the request's allowlists.
+    for allow in [
+        json!({ "source_ids": ["other"] }),
+        json!({ "source_ids": [] }),
+        json!({ "collections": ["notes"] }),
+        json!({ "source_ids": ["runbook"], "collections": ["notes"] }),
+    ] {
+        let mut req = json!({ "scope": team(), "source_id": "runbook" });
+        req.as_object_mut()
+            .unwrap()
+            .extend(allow.as_object().unwrap().clone());
+        let e = svc.call("knowledge_summarize", req).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotFound, "{allow}");
+        assert_eq!(e.message, "source \"runbook\"");
+    }
+    let s = svc
+        .call(
+            "knowledge_summarize",
+            json!({ "scope": team(), "source_id": "runbook",
+                    "source_ids": ["runbook"], "collections": ["docs"] }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(s["summary"], SUMMARY);
     for bad in [
         json!({}),
         json!({ "text": "a", "source_id": "runbook" }),
