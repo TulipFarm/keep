@@ -109,6 +109,11 @@ async fn main() -> anyhow::Result<()> {
             anyhow::ensure!(status.is_success(), "not ready: HTTP {status}");
             Ok(())
         }
+        Command::FetchModel(args) => {
+            let dir = keep_server::embedder::fetch_local(&args.dir).await?;
+            eprintln!("keep: the local embedding model is in {}", dir.display());
+            Ok(())
+        }
         Command::Token(TokenCommand::New) => {
             let token = auth::new_token();
             println!("{token}\n{}", auth::hash_hex(&token));

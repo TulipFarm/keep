@@ -5,10 +5,13 @@ use async_trait::async_trait;
 
 use crate::vector::{Distance, ScoredId, StoreError, VectorCapabilities, VectorIndex, VectorPoint};
 
+/// A stored vector and its tags.
+type Entry = (Vec<f32>, Vec<String>);
+
 #[derive(Default)]
 struct Collection {
     dimensions: usize,
-    namespaces: BTreeMap<String, BTreeMap<String, Vec<f32>>>,
+    namespaces: BTreeMap<String, BTreeMap<String, Entry>>,
 }
 
 /// Exact brute-force cosine search held in process memory.
@@ -20,6 +23,42 @@ pub struct InMemoryVectorIndex {
 impl InMemoryVectorIndex {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn scan(
+        &self,
+        collection: &str,
+        namespace: &str,
+        query: &[f32],
+        k: usize,
+        tags: Option<&[String]>,
+    ) -> Result<Vec<ScoredId>, StoreError> {
+        let cols = self.collections.lock().expect("lock");
+        let col = cols
+            .get(collection)
+            .ok_or_else(|| StoreError::UnknownCollection(collection.into()))?;
+        if query.len() != col.dimensions {
+            return Err(StoreError::DimensionMismatch {
+                expected: col.dimensions,
+                got: query.len(),
+            });
+        }
+        let hits = col
+            .namespaces
+            .get(namespace)
+            .map(|ns| {
+                ns.iter()
+                    .filter(|(_, (_, t))| {
+                        tags.is_none_or(|want| t.iter().any(|x| want.contains(x)))
+                    })
+                    .map(|(id, (v, _))| ScoredId {
+                        id: id.clone(),
+                        score: cosine(query, v),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(crate::rank(hits, k))
     }
 }
 
@@ -88,7 +127,7 @@ impl VectorIndex for InMemoryVectorIndex {
         }
         let ns = col.namespaces.entry(namespace.to_owned()).or_default();
         for p in points {
-            ns.insert(p.id.clone(), p.vector.clone());
+            ns.insert(p.id.clone(), (p.vector.clone(), p.tags.clone()));
         }
         Ok(())
     }
@@ -100,29 +139,18 @@ impl VectorIndex for InMemoryVectorIndex {
         query: &[f32],
         k: usize,
     ) -> Result<Vec<ScoredId>, StoreError> {
-        let cols = self.collections.lock().expect("lock");
-        let col = cols
-            .get(collection)
-            .ok_or_else(|| StoreError::UnknownCollection(collection.into()))?;
-        if query.len() != col.dimensions {
-            return Err(StoreError::DimensionMismatch {
-                expected: col.dimensions,
-                got: query.len(),
-            });
-        }
-        let hits = col
-            .namespaces
-            .get(namespace)
-            .map(|ns| {
-                ns.iter()
-                    .map(|(id, v)| ScoredId {
-                        id: id.clone(),
-                        score: cosine(query, v),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(crate::rank(hits, k))
+        self.scan(collection, namespace, query, k, None)
+    }
+
+    async fn search_tagged(
+        &self,
+        collection: &str,
+        namespace: &str,
+        query: &[f32],
+        k: usize,
+        tags: &[String],
+    ) -> Result<Vec<ScoredId>, StoreError> {
+        self.scan(collection, namespace, query, k, Some(tags))
     }
 
     async fn delete_namespace(&self, collection: &str, namespace: &str) -> Result<(), StoreError> {
@@ -167,6 +195,7 @@ mod tests {
             &[VectorPoint {
                 id: "x".into(),
                 vector: vec![1.0, 0.0],
+                tags: vec![],
             }],
         )
         .await
@@ -177,6 +206,7 @@ mod tests {
             &[VectorPoint {
                 id: "y".into(),
                 vector: vec![1.0, 0.0],
+                tags: vec![],
             }],
         )
         .await
@@ -192,7 +222,8 @@ mod tests {
                 "a",
                 &[VectorPoint {
                     id: "z".into(),
-                    vector: vec![1.0]
+                    vector: vec![1.0],
+                    tags: vec![],
                 }]
             )
             .await,
@@ -210,6 +241,45 @@ mod tests {
         idx.delete_namespace("c", "a").await.unwrap();
         assert!(
             idx.search("c", "a", &[1.0, 0.0], 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn tagged_search_filters_before_the_limit() {
+        let idx = InMemoryVectorIndex::new();
+        idx.ensure_collection("c", 2).await.unwrap();
+        let point = |id: &str, v: Vec<f32>, tags: &[&str]| VectorPoint {
+            id: id.into(),
+            vector: v,
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+        };
+        idx.upsert(
+            "c",
+            "a",
+            &[
+                point("near", vec![1.0, 0.0], &["s1"]),
+                point("mid", vec![0.9, 0.1], &["s1", "s2"]),
+                point("far", vec![0.0, 1.0], &["s3"]),
+            ],
+        )
+        .await
+        .unwrap();
+        let ids = |hits: Vec<ScoredId>| hits.into_iter().map(|h| h.id).collect::<Vec<_>>();
+        let only_s3 = idx
+            .search_tagged("c", "a", &[1.0, 0.0], 1, &["s3".into()])
+            .await
+            .unwrap();
+        assert_eq!(ids(only_s3), ["far"]);
+        let s2 = idx
+            .search_tagged("c", "a", &[1.0, 0.0], 5, &["s2".into()])
+            .await
+            .unwrap();
+        assert_eq!(ids(s2), ["mid"]);
+        assert!(
+            idx.search_tagged("c", "a", &[1.0, 0.0], 5, &[])
                 .await
                 .unwrap()
                 .is_empty()

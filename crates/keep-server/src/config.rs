@@ -32,6 +32,17 @@ pub enum Command {
     /// Exit 0 if a running `keep serve` is ready, 1 if not. For container
     /// health checks.
     Healthcheck(HealthcheckArgs),
+    /// Download the pinned local embedding model into the model cache and
+    /// verify its SHA-256 digests, so a later `--embedder local` start
+    /// never touches the network. For baking the model into an image.
+    FetchModel(FetchModelArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FetchModelArgs {
+    /// The model cache to fill.
+    #[arg(long, env = "KEEP_MODEL_CACHE")]
+    pub dir: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -161,6 +172,8 @@ pub struct ServiceArgs {
         global = true
     )]
     pub evidence_budget_per: BudgetPer,
+    #[command(flatten)]
+    pub model: crate::model::ModelArgs,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]

@@ -130,8 +130,10 @@ keep --project my-app mcp --server http://127.0.0.1:7357 # in each agent
 ```
 
 The daemon can hold Memory in memory or in Postgres, embeds Knowledge with
-a local ONNX model (no hosted model API), and supports scoped tokens, TLS
-and per-caller evidence budgets.
+a local ONNX model (no hosted model API unless you configure an
+OpenAI-compatible model for fact extraction and summaries), and supports
+scoped tokens, TLS, per-caller evidence budgets and per-source read
+allowlists. A container image is published at `ghcr.io/tulipfarm/keep`.
 [docs/server.md](docs/server.md) covers storage, scopes, the tool list,
 security and copy-paste client configuration.
 

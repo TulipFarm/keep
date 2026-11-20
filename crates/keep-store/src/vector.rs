@@ -27,6 +27,10 @@ pub struct VectorPoint {
     /// Caller-stable id; the backend may derive its own key from it.
     pub id: String,
     pub vector: Vec<f32>,
+    /// Opaque labels a search can be restricted to with
+    /// [`VectorIndex::search_tagged`], such as digests of the point's sources.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -70,6 +74,20 @@ pub trait VectorIndex: Send + Sync {
         query: &[f32],
         k: usize,
     ) -> Result<Vec<ScoredId>, StoreError>;
+    /// [`VectorIndex::search`] over only the points carrying at least one of
+    /// `tags`, filtered inside the backend before the top `k` are chosen.
+    /// No tags matches nothing.
+    async fn search_tagged(
+        &self,
+        collection: &str,
+        namespace: &str,
+        query: &[f32],
+        k: usize,
+        tags: &[String],
+    ) -> Result<Vec<ScoredId>, StoreError> {
+        let _ = (collection, namespace, query, k, tags);
+        Err(StoreError::Capability("search_tagged".into()))
+    }
     async fn delete_namespace(&self, collection: &str, namespace: &str) -> Result<(), StoreError>;
     /// Remove individual points. Deleting ids that do not exist is not an
     /// error, so a purge can be replayed safely.

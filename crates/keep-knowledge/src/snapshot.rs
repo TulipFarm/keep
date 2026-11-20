@@ -6,7 +6,7 @@
 //! index per distinct visible set, so a question asked before later sessions
 //! were recorded never loses candidates to items it cannot see.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use keep_store::{Bm25Index, Bm25Params};
@@ -57,12 +57,20 @@ impl Snapshot {
         }
     }
 
-    pub fn visible(&self, parts: &[String], access: &Access, as_of: AsOf) -> Visible {
+    /// With `sources`, only chunks of those sources and facts with evidence
+    /// from them (judged on that evidence alone) are visible.
+    pub fn visible(
+        &self,
+        parts: &[String],
+        access: &Access,
+        sources: Option<&BTreeSet<String>>,
+        as_of: AsOf,
+    ) -> Visible {
         let mut items = Vec::new();
         let mut hidden = 0;
         let readable = |p: &String| access.allows(p) && parts.contains(p);
         for (i, c) in self.chunks.iter().enumerate() {
-            if readable(&c.partition) {
+            if readable(&c.partition) && sources.is_none_or(|s| s.contains(&c.source_id)) {
                 if chunk_visible(c, as_of) {
                     items.push(i as u32);
                 } else {
@@ -71,12 +79,24 @@ impl Snapshot {
             }
         }
         for (i, f) in self.facts.iter().enumerate() {
-            if readable(&f.partition) {
-                if fact_as_of(f, as_of).is_some() {
-                    items.push((self.chunks.len() + i) as u32);
-                } else {
-                    hidden += 1;
+            if !readable(&f.partition) {
+                continue;
+            }
+            let shown = match sources {
+                None => fact_as_of(f, as_of).is_some(),
+                Some(s) => {
+                    let mut only = f.clone();
+                    only.evidence.retain(|e| s.contains(&e.source_id));
+                    if only.evidence.is_empty() {
+                        continue;
+                    }
+                    fact_as_of(&only, as_of).is_some()
                 }
+            };
+            if shown {
+                items.push((self.chunks.len() + i) as u32);
+            } else {
+                hidden += 1;
             }
         }
         let by_id = items.iter().map(|&i| (self.id(i).to_string(), i)).collect();

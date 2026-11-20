@@ -200,6 +200,7 @@ impl HistoryWriter {
                     .map(|(c, vector)| VectorPoint {
                         id: c.id.clone(),
                         vector,
+                        tags: vec![],
                     }),
             );
         }

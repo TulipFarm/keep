@@ -1900,6 +1900,7 @@ async fn ingest_history(
                     s.id,
                     s.date_raw.as_deref().unwrap_or("date unknown")
                 ),
+                metadata: Default::default(),
                 kind: SourceKind::Conversation,
             },
             episodes,

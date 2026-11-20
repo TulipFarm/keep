@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
+use futures_util::{StreamExt, stream};
 use keep_providers::{ApproxTokenizer, Embedder, HashEmbedder, Reranker, Tokenizer, timing};
 use keep_store::{Bm25Index, Bm25Params, LexicalIndex, ScoredId, VectorIndex, VectorPoint};
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,7 @@ use crate::fusion::{DEFAULT_RRF_K, rrf};
 use crate::index::{IndexRequest, IndexView, normalize, render};
 use crate::ledger::{
     AliasWrite, ApplyOutcome, ChangeSet, EntityWrite, IndexInputs, IngestBatch, IngestReport,
-    KnowledgeError, Ledger, Projection, Result, VersionWrite, normalize_name,
+    KnowledgeError, Ledger, Projection, PurgeReport, Result, VersionWrite, normalize_name,
 };
 use crate::model::{
     Access, Chunk, Entity, Episode, Evidence, Fact, FactStatus, FactVersion, ItemRef, Job,
@@ -27,6 +28,7 @@ use crate::model::{
     digest_id,
 };
 use crate::resolve::{Incoming, Rival, plan};
+use crate::session_extract::{SessionExtractor, claims_for, episode_sessions};
 use crate::snapshot::{Snapshot, Snapshots};
 use crate::temporal::{AsOf, ValidMatch, chunk_visible, fact_as_of};
 
@@ -122,6 +124,39 @@ pub struct SourceInput {
     pub collection: String,
     pub title: String,
     pub kind: SourceKind,
+    /// Small host-defined string map returned with citations, such as a
+    /// document URL or id. See [`MAX_METADATA_KEYS`] and related limits.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Most keys a source's metadata may have.
+pub const MAX_METADATA_KEYS: usize = 16;
+/// Longest metadata key, in bytes.
+pub const MAX_METADATA_KEY_BYTES: usize = 64;
+/// Longest metadata value, in bytes.
+pub const MAX_METADATA_VALUE_BYTES: usize = 1024;
+
+/// Check a source's metadata against the size limits.
+pub fn validate_metadata(m: &BTreeMap<String, String>) -> Result<()> {
+    if m.len() > MAX_METADATA_KEYS {
+        return Err(KnowledgeError::Invalid(format!(
+            "metadata has more than {MAX_METADATA_KEYS} keys"
+        )));
+    }
+    for (k, v) in m {
+        if k.trim().is_empty() || k.len() > MAX_METADATA_KEY_BYTES {
+            return Err(KnowledgeError::Invalid(format!(
+                "metadata keys must be 1 to {MAX_METADATA_KEY_BYTES} bytes"
+            )));
+        }
+        if v.len() > MAX_METADATA_VALUE_BYTES {
+            return Err(KnowledgeError::Invalid(format!(
+                "metadata values must be at most {MAX_METADATA_VALUE_BYTES} bytes"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -145,6 +180,9 @@ pub struct Citation {
     pub char_start: i32,
     pub char_end: i32,
     pub quote: String,
+    /// The source's host-defined metadata, such as a document URL.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_metadata: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -253,6 +291,11 @@ pub struct Knowledge {
     vectors: Option<(Arc<dyn VectorIndex>, String)>,
     embedder: Arc<dyn Embedder>,
     extractor: Arc<dyn FactExtractor>,
+    /// When set, extraction jobs read each episode through this model-backed
+    /// session extractor instead of `extractor`.
+    session_extractor: Option<Arc<SessionExtractor>>,
+    /// Extraction jobs run at once within one batch.
+    extract_concurrency: usize,
     tokenizer: Arc<dyn Tokenizer>,
     clock: Arc<dyn Clock>,
     config: KnowledgeConfig,
@@ -298,6 +341,48 @@ struct Planned<'a> {
 
 pub fn namespace(corpus: &str, partition: &str) -> String {
     digest_hex(&["ns", corpus, partition])[..32].to_string()
+}
+
+/// A source's title and metadata, as citations show them.
+type Label = (String, BTreeMap<String, String>);
+
+/// What one read may see: readable partitions and, when the caller passed
+/// an allowlist, the sources records must derive from.
+struct ReadScope {
+    parts: Vec<String>,
+    sources: Option<BTreeSet<String>>,
+    list: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
+}
+
+impl ReadScope {
+    /// Nothing can match: no readable partition, or an empty allowlist.
+    fn is_empty(&self) -> bool {
+        self.parts.is_empty() || self.sources.as_ref().is_some_and(BTreeSet::is_empty)
+    }
+
+    fn allows_source(&self, id: &str) -> bool {
+        self.sources.as_ref().is_none_or(|s| s.contains(id))
+    }
+
+    /// The fact with only allowed evidence, or `None` if none is allowed.
+    fn restrict<'a>(&self, f: &'a Fact) -> Option<std::borrow::Cow<'a, Fact>> {
+        let Some(allowed) = &self.sources else {
+            return Some(std::borrow::Cow::Borrowed(f));
+        };
+        if f.evidence.iter().all(|e| allowed.contains(&e.source_id)) {
+            return Some(std::borrow::Cow::Borrowed(f));
+        }
+        let mut f = f.clone();
+        f.evidence.retain(|e| allowed.contains(&e.source_id));
+        (!f.evidence.is_empty()).then_some(std::borrow::Cow::Owned(f))
+    }
+}
+
+/// The opaque vector tag for a source, so a vector search can be restricted
+/// to items derived from given sources without storing their ids.
+pub fn source_tag(corpus: &str, source_id: &str) -> String {
+    digest_hex(&["src", corpus, source_id])[..32].to_string()
 }
 
 fn render_date(t: Option<Time>) -> String {
@@ -366,6 +451,8 @@ impl Knowledge {
             vectors,
             embedder: Arc::new(HashEmbedder::new(256)),
             extractor: Arc::new(RuleExtractor),
+            session_extractor: None,
+            extract_concurrency: 1,
             tokenizer: Arc::new(ApproxTokenizer),
             clock: Arc::new(SystemClock),
             config: KnowledgeConfig::default(),
@@ -384,6 +471,20 @@ impl Knowledge {
     }
     pub fn with_extractor(mut self, extractor: Arc<dyn FactExtractor>) -> Self {
         self.extractor = extractor;
+        self
+    }
+    /// Extract facts with a model: every episode is read through
+    /// `extractor` (see [`episode_sessions`]) and its open-vocabulary facts
+    /// cite the whole episode. Up to `concurrency` episodes are read at
+    /// once. A model failure fails the job like any other, so it is retried
+    /// or recorded as failed, never skipped.
+    pub fn with_session_extractor(
+        mut self,
+        extractor: Arc<SessionExtractor>,
+        concurrency: usize,
+    ) -> Self {
+        self.session_extractor = Some(extractor);
+        self.extract_concurrency = concurrency.max(1);
         self
     }
     pub fn with_tokenizer(mut self, tokenizer: Arc<dyn Tokenizer>) -> Self {
@@ -410,6 +511,8 @@ impl Knowledge {
             vectors: self.vectors.clone(),
             embedder: self.embedder.clone(),
             extractor: self.extractor.clone(),
+            session_extractor: self.session_extractor.clone(),
+            extract_concurrency: self.extract_concurrency,
             tokenizer: self.tokenizer.clone(),
             clock,
             config: self.config.clone(),
@@ -473,6 +576,31 @@ impl Knowledge {
         source: SourceInput,
         episodes: Vec<EpisodeInput>,
     ) -> Result<IngestReport> {
+        self.ingest_inner(corpus, source, episodes, false).await
+    }
+
+    /// Ingest a new revision of a source. If the source exists with
+    /// different metadata or episodes, its old content and everything
+    /// derived only from it is purged and the new episodes are inserted in
+    /// the same ledger transaction, so reads never see both revisions.
+    /// Sending the current revision again is a no-op.
+    pub async fn ingest_revision(
+        &self,
+        corpus: &str,
+        source: SourceInput,
+        episodes: Vec<EpisodeInput>,
+    ) -> Result<IngestReport> {
+        self.ingest_inner(corpus, source, episodes, true).await
+    }
+
+    async fn ingest_inner(
+        &self,
+        corpus: &str,
+        source: SourceInput,
+        episodes: Vec<EpisodeInput>,
+        replace: bool,
+    ) -> Result<IngestReport> {
+        validate_metadata(&source.metadata)?;
         for (what, v) in [
             ("corpus", corpus),
             ("source id", &source.id),
@@ -529,7 +657,9 @@ impl Knowledge {
         }
         drop(chunking);
         let _t = timing::span("knowledge.ledger_ingest").items(chunks.len());
-        self.ledger
+        let new_points: BTreeSet<String> = chunks.iter().map(|c| c.id.clone()).collect();
+        let report = self
+            .ledger
             .ingest(IngestBatch {
                 source: Source {
                     corpus: corpus.into(),
@@ -539,12 +669,73 @@ impl Knowledge {
                     title: source.title,
                     kind: source.kind,
                     created_at: now,
+                    metadata: source.metadata,
                 },
                 episodes: eps,
                 chunks,
                 now,
+                replace,
             })
-            .await
+            .await?;
+        if let Some(purged) = &report.purged {
+            self.snapshots.forget(corpus);
+            let stale: Vec<String> = purged
+                .point_ids
+                .iter()
+                .filter(|id| !new_points.contains(*id))
+                .cloned()
+                .collect();
+            self.clean_projection(corpus, purged, &stale, now).await?;
+        }
+        Ok(report)
+    }
+
+    /// After a purge: drop stale vector points (deferred to jobs if the
+    /// index is down) and re-project facts that lost a supporting source.
+    /// Returns (deleted, deferred) point counts.
+    async fn clean_projection(
+        &self,
+        corpus: &str,
+        purged: &PurgeReport,
+        stale: &[String],
+        now: Time,
+    ) -> Result<(usize, usize)> {
+        let mut counts = (0, 0);
+        let Some((index, _)) = &self.vectors else {
+            return Ok(counts);
+        };
+        if !stale.is_empty() {
+            let ns = namespace(corpus, &purged.partition);
+            match index
+                .delete_points(&self.config.collection, &ns, stale)
+                .await
+            {
+                Ok(()) => counts.0 = stale.len(),
+                Err(_) => {
+                    let jobs: Vec<NewJob> = stale
+                        .iter()
+                        .map(|id| NewJob {
+                            kind: JobKind::Unproject,
+                            target: format!("{ns}\u{1f}{id}"),
+                        })
+                        .collect();
+                    self.ledger.enqueue(corpus, &jobs, now).await?;
+                    counts.1 = jobs.len();
+                }
+            }
+        }
+        if !purged.kept_fact_ids.is_empty() {
+            let jobs: Vec<NewJob> = purged
+                .kept_fact_ids
+                .iter()
+                .map(|id| NewJob {
+                    kind: JobKind::Project,
+                    target: id.clone(),
+                })
+                .collect();
+            self.ledger.enqueue(corpus, &jobs, now).await?;
+        }
+        Ok(counts)
     }
 
     /// Run due jobs until none are left (or `max_rounds` batches ran).
@@ -559,19 +750,22 @@ impl Knowledge {
             }
             let (project, other): (Vec<Job>, Vec<Job>) =
                 jobs.into_iter().partition(|j| j.kind == JobKind::Project);
-            let mut outcomes: Vec<(Job, JobOutcome)> = Vec::new();
-            for job in other {
-                let _t = timing::span(match job.kind {
-                    JobKind::Extract => "knowledge.extract_episode",
-                    _ => "knowledge.unproject",
+            let mut outcomes: Vec<(Job, JobOutcome)> = stream::iter(other)
+                .map(|job| async move {
+                    let _t = timing::span(match job.kind {
+                        JobKind::Extract => "knowledge.extract_episode",
+                        _ => "knowledge.unproject",
+                    })
+                    .items(1);
+                    let r = match job.kind {
+                        JobKind::Extract => self.extract_episode(corpus, &job.target).await,
+                        _ => self.unproject(&job.target).await,
+                    };
+                    (job, r.map_err(|e| (e.to_string(), retryable(&e))))
                 })
-                .items(1);
-                let r = match job.kind {
-                    JobKind::Extract => self.extract_episode(corpus, &job.target).await,
-                    _ => self.unproject(&job.target).await,
-                };
-                outcomes.push((job, r.map_err(|e| (e.to_string(), retryable(&e)))));
-            }
+                .buffered(self.extract_concurrency)
+                .collect()
+                .await;
             match self.project(corpus, &project).await {
                 Ok(()) => outcomes.extend(project.into_iter().map(|j| (j, Ok(())))),
                 Err(e) => {
@@ -688,6 +882,7 @@ impl Knowledge {
                 .push(VectorPoint {
                     id: id.clone(),
                     vector,
+                    tags: p.sources.iter().map(|x| source_tag(corpus, x)).collect(),
                 });
         }
         for (ns, points) in &by_ns {
@@ -729,6 +924,19 @@ impl Knowledge {
         let Some(ep) = self.ledger.episode(corpus, episode_id).await? else {
             return Ok(());
         };
+        if let Some(sx) = &self.session_extractor {
+            let _t = timing::span("knowledge.extract_model").items(1);
+            let mut facts = Vec::new();
+            for session in episode_sessions(&ep) {
+                facts.extend(sx.extract(&session).await?.facts);
+            }
+            let claims = claims_for(&facts);
+            if !claims.is_empty() {
+                self.apply_claims(corpus, &sx.evidence_label(), &claims)
+                    .await?;
+            }
+            return Ok(());
+        }
         let t = timing::span("knowledge.extract_rules").items(1);
         let claims = validate(&ep, self.extractor.extract(&ep).await?);
         drop(t);
@@ -982,6 +1190,21 @@ impl Knowledge {
                 });
             }
             if let Some(f) = existing {
+                // A new supporting source changes the fact's vector tags.
+                let new_source = evidence
+                    .iter()
+                    .any(|e| !f.evidence.iter().any(|x| x.source_id == e.source_id));
+                if new_source
+                    && !cs
+                        .jobs
+                        .iter()
+                        .any(|j| j.kind == JobKind::Project && j.target == fact_id)
+                {
+                    cs.jobs.push(NewJob {
+                        kind: JobKind::Project,
+                        target: fact_id.clone(),
+                    });
+                }
                 for evidence in evidence {
                     if f.evidence.iter().any(|e| e.id == evidence.id) {
                         continue;
@@ -1134,17 +1357,49 @@ impl Knowledge {
             .collect())
     }
 
-    async fn citation_for_chunk(&self, c: &Chunk) -> Result<Citation> {
-        let title = self.source_title(&c.corpus, &c.source_id).await?;
-        Ok(chunk_citation(c, title))
+    /// Readable partitions plus the source allowlist, resolved once per read.
+    async fn scope(&self, corpus: &str, access: &Access) -> Result<ReadScope> {
+        let parts = self.readable(corpus, access).await?;
+        let sources = match &access.collections {
+            Some(cols) => {
+                let cols: Vec<String> = cols.iter().cloned().collect();
+                let in_cols = if parts.is_empty() || cols.is_empty() {
+                    Vec::new()
+                } else {
+                    self.ledger
+                        .sources_in_collections(corpus, &parts, &cols)
+                        .await?
+                };
+                Some(
+                    in_cols
+                        .into_iter()
+                        .filter(|id| access.sources.as_ref().is_none_or(|s| s.contains(id)))
+                        .collect(),
+                )
+            }
+            None => access.sources.clone(),
+        };
+        Ok(ReadScope {
+            tags: sources
+                .as_ref()
+                .map(|s| s.iter().map(|id| source_tag(corpus, id)).collect()),
+            list: sources.as_ref().map(|s| s.iter().cloned().collect()),
+            sources,
+            parts,
+        })
     }
 
-    async fn source_title(&self, corpus: &str, source_id: &str) -> Result<String> {
+    async fn citation_for_chunk(&self, c: &Chunk) -> Result<Citation> {
+        let label = self.source_label(&c.corpus, &c.source_id).await?;
+        Ok(chunk_citation(c, label))
+    }
+
+    async fn source_label(&self, corpus: &str, source_id: &str) -> Result<Label> {
         Ok(self
             .ledger
             .source(corpus, source_id)
             .await?
-            .map(|s| s.title)
+            .map(|s| (s.title, s.metadata))
             .unwrap_or_default())
     }
 
@@ -1152,12 +1407,7 @@ impl Knowledge {
         let Some(ep) = self.ledger.episode(&e.corpus, &e.episode_id).await? else {
             return Ok(None);
         };
-        let title = self
-            .ledger
-            .source(&e.corpus, &e.source_id)
-            .await?
-            .map(|s| s.title)
-            .unwrap_or_default();
+        let (title, metadata) = self.source_label(&e.corpus, &e.source_id).await?;
         Ok(Some(Citation {
             reference: format!("keep:{}", e.id),
             source_id: e.source_id.clone(),
@@ -1168,6 +1418,7 @@ impl Knowledge {
             char_start: e.char_start,
             char_end: e.char_end,
             quote: e.quote.clone(),
+            source_metadata: metadata,
         }))
     }
 
@@ -1184,27 +1435,28 @@ impl Knowledge {
             method: self.method(),
             ..Default::default()
         };
-        let parts = self.readable(&req.corpus, &req.access).await?;
-        if parts.is_empty() || req.query.trim().is_empty() {
+        let scope = self.scope(&req.corpus, &req.access).await?;
+        if scope.is_empty() || req.query.trim().is_empty() {
             return Ok(out);
         }
+        let parts = &scope.parts;
         let limit = if req.limit == 0 { 10 } else { req.limit };
         let pool = self.config.candidate_pool.max(limit * 4);
         if let LexicalMode::Bm25(params) = self.config.lexical {
             return self
-                .search_visible(req, allowance, params, &parts, limit, pool, out)
+                .search_visible(req, allowance, params, &scope, limit, pool, out)
                 .await;
         }
 
         let lexical: Vec<String> = self
             .ledger
-            .lexical(&req.corpus, &parts, &req.query, pool)
+            .lexical(&req.corpus, parts, &req.query, pool, scope.list.as_deref())
             .await?
             .into_iter()
             .map(|h| h.id)
             .collect();
         let vector = match self
-            .vector_candidates(&req.corpus, &parts, &req.query, pool)
+            .vector_candidates(&req.corpus, &scope, &req.query, pool)
             .await
         {
             Ok(v) => v,
@@ -1259,7 +1511,10 @@ impl Knowledge {
             let hit = match &item {
                 ItemRef::Chunk(id) => {
                     let Some(c) = chunks.get(id) else { continue };
-                    if !req.access.allows(&c.partition) || !chunk_visible(c, req.as_of) {
+                    if !req.access.allows(&c.partition)
+                        || !scope.allows_source(&c.source_id)
+                        || !chunk_visible(c, req.as_of)
+                    {
                         continue;
                     }
                     self.chunk_hit(&item, score, c).await?
@@ -1269,7 +1524,8 @@ impl Knowledge {
                     if !req.access.allows(&f.partition) {
                         continue;
                     }
-                    let Some(hit) = self.fact_hit(&item, score, f, req.as_of).await? else {
+                    let Some(f) = scope.restrict(f) else { continue };
+                    let Some(hit) = self.fact_hit(&item, score, &f, req.as_of).await? else {
                         continue;
                     };
                     hit
@@ -1281,8 +1537,8 @@ impl Knowledge {
     }
 
     async fn chunk_hit(&self, item: &ItemRef, score: f32, c: &Chunk) -> Result<Hit> {
-        let title = self.source_title(&c.corpus, &c.source_id).await?;
-        Ok(chunk_hit_titled(&*self.tokenizer, item, score, c, title))
+        let label = self.source_label(&c.corpus, &c.source_id).await?;
+        Ok(chunk_hit_titled(&*self.tokenizer, item, score, c, label))
     }
 
     /// `None` when the fact is not visible at `as_of` or its first
@@ -1349,13 +1605,13 @@ impl Knowledge {
         req: &SearchRequest,
         allowance: &mut EvidenceAllowance,
         params: Bm25Params,
-        parts: &[String],
+        scope: &ReadScope,
         limit: usize,
         pool: usize,
         mut out: SearchResult,
     ) -> Result<SearchResult> {
         let snap = self.snapshot(&req.corpus).await?;
-        let vis = snap.visible(parts, &req.access, req.as_of);
+        let vis = snap.visible(&scope.parts, &req.access, scope.sources.as_ref(), req.as_of);
         let lexical: Vec<String> = snap
             .bm25(params, &vis)
             .search(&req.query, pool)
@@ -1365,7 +1621,7 @@ impl Knowledge {
         // Over-fetch by the number of invisible items so filtering cannot
         // empty the pool.
         let vector = match self
-            .vector_candidates(&req.corpus, parts, &req.query, pool + vis.hidden)
+            .vector_candidates(&req.corpus, scope, &req.query, pool + vis.hidden)
             .await
         {
             Ok(v) => v
@@ -1405,7 +1661,7 @@ impl Knowledge {
             }
         }
         // One title lookup per source rather than per hit.
-        let mut titles: HashMap<String, String> = HashMap::new();
+        let mut titles: HashMap<String, Label> = HashMap::new();
         for (i, score) in fused {
             if out.hits.len() >= limit {
                 break;
@@ -1416,7 +1672,7 @@ impl Knowledge {
                     let title = match titles.get(&c.source_id) {
                         Some(t) => t.clone(),
                         None => {
-                            let t = self.source_title(&c.corpus, &c.source_id).await?;
+                            let t = self.source_label(&c.corpus, &c.source_id).await?;
                             titles.insert(c.source_id.clone(), t.clone());
                             t
                         }
@@ -1425,7 +1681,8 @@ impl Knowledge {
                 }
                 None => {
                     let f = &snap.facts[i as usize - snap.chunks.len()];
-                    let Some(hit) = self.fact_hit(&item, score, f, req.as_of).await? else {
+                    let Some(f) = scope.restrict(f) else { continue };
+                    let Some(hit) = self.fact_hit(&item, score, &f, req.as_of).await? else {
                         continue;
                     };
                     hit
@@ -1439,7 +1696,7 @@ impl Knowledge {
     async fn vector_candidates(
         &self,
         corpus: &str,
-        parts: &[String],
+        scope: &ReadScope,
         query: &str,
         pool: usize,
     ) -> Result<Vec<String>> {
@@ -1455,12 +1712,16 @@ impl Knowledge {
             .pop()
             .unwrap_or_default();
         let mut hits: Vec<ScoredId> = Vec::new();
-        for p in parts {
-            hits.extend(
-                index
-                    .search(&self.config.collection, &namespace(corpus, p), &q, pool)
-                    .await?,
-            );
+        for p in &scope.parts {
+            let ns = namespace(corpus, p);
+            hits.extend(match &scope.tags {
+                Some(tags) => {
+                    index
+                        .search_tagged(&self.config.collection, &ns, &q, pool, tags)
+                        .await?
+                }
+                None => index.search(&self.config.collection, &ns, &q, pool).await?,
+            });
         }
         Ok(keep_store::rank(hits, pool)
             .into_iter()
@@ -1479,6 +1740,7 @@ impl Knowledge {
         allowance: &mut EvidenceAllowance,
     ) -> Result<FetchResult> {
         let item = ItemRef::from_point_id(id).ok_or(KnowledgeError::NotFound)?;
+        let scope = self.scope(corpus, access).await?;
         match item {
             ItemRef::Chunk(id) => {
                 let c = self
@@ -1486,7 +1748,11 @@ impl Knowledge {
                     .chunks(corpus, std::slice::from_ref(&id))
                     .await?
                     .pop()
-                    .filter(|c| access.allows(&c.partition) && chunk_visible(c, as_of))
+                    .filter(|c| {
+                        access.allows(&c.partition)
+                            && scope.allows_source(&c.source_id)
+                            && chunk_visible(c, as_of)
+                    })
                     .ok_or(KnowledgeError::NotFound)?;
                 let text = render_chunk(&c);
                 let tokens = self.tokenizer.count(&text);
@@ -1509,6 +1775,10 @@ impl Knowledge {
                     .pop()
                     .filter(|f| access.allows(&f.partition))
                     .ok_or(KnowledgeError::NotFound)?;
+                let f = scope
+                    .restrict(&f)
+                    .ok_or(KnowledgeError::NotFound)?
+                    .into_owned();
                 let view = fact_as_of(&f, as_of).ok_or(KnowledgeError::NotFound)?;
                 let summary = summary_of(&view.version, view.valid);
                 let mut text = render_fact(&f.text, &summary);
@@ -1559,12 +1829,13 @@ impl Knowledge {
 
     /// Resolve a chunk, evidence or fact id to stable citations.
     pub async fn cite(&self, corpus: &str, access: &Access, id: &str) -> Result<Vec<Citation>> {
+        let scope = self.scope(corpus, access).await?;
         if id.starts_with("ev_") {
             let e = self
                 .ledger
                 .evidence(corpus, id)
                 .await?
-                .filter(|e| access.allows(&e.partition))
+                .filter(|e| access.allows(&e.partition) && scope.allows_source(&e.source_id))
                 .ok_or(KnowledgeError::NotFound)?;
             return Ok(vec![
                 self.citation_for_evidence(&e)
@@ -1579,7 +1850,7 @@ impl Knowledge {
                     .chunks(corpus, &[cid])
                     .await?
                     .pop()
-                    .filter(|c| access.allows(&c.partition))
+                    .filter(|c| access.allows(&c.partition) && scope.allows_source(&c.source_id))
                     .ok_or(KnowledgeError::NotFound)?;
                 Ok(vec![self.citation_for_chunk(&c).await?])
             }
@@ -1591,6 +1862,7 @@ impl Knowledge {
                     .pop()
                     .filter(|f| access.allows(&f.partition))
                     .ok_or(KnowledgeError::NotFound)?;
+                let f = scope.restrict(&f).ok_or(KnowledgeError::NotFound)?;
                 let mut out = Vec::new();
                 for e in &f.evidence {
                     if let Some(c) = self.citation_for_evidence(e).await? {
@@ -1614,9 +1886,10 @@ impl Knowledge {
         fanout: usize,
         as_of: AsOf,
     ) -> Result<Neighbourhood> {
-        let parts = self.readable(corpus, access).await?;
+        let scope = self.scope(corpus, access).await?;
+        let parts = &scope.parts;
         let mut out = Neighbourhood::default();
-        if parts.is_empty() {
+        if scope.is_empty() {
             return Ok(out);
         }
         let depth = depth.clamp(1, 2);
@@ -1626,7 +1899,7 @@ impl Knowledge {
             Some(e) if access.allows(&e.partition) => vec![e],
             _ => {
                 self.ledger
-                    .entities_named(corpus, &parts, &normalize_name(start))
+                    .entities_named(corpus, parts, &normalize_name(start))
                     .await?
             }
         };
@@ -1638,7 +1911,7 @@ impl Knowledge {
             for e in &frontier {
                 let facts = self
                     .ledger
-                    .facts_about(corpus, &parts, &e.id, fanout + 1)
+                    .facts_about(corpus, parts, &e.id, fanout + 1, scope.list.as_deref())
                     .await?;
                 if facts.len() > fanout {
                     out.truncated = true;
@@ -1647,6 +1920,9 @@ impl Knowledge {
                     if !access.allows(&f.partition) {
                         continue;
                     }
+                    let Some(f) = scope.restrict(&f) else {
+                        continue;
+                    };
                     let Some(view) = fact_as_of(&f, as_of) else {
                         continue;
                     };
@@ -1683,6 +1959,17 @@ impl Knowledge {
             }
             frontier = next;
         }
+        if scope.sources.is_some() {
+            // Entities exist independently of sources; under an allowlist,
+            // show only those an allowed fact connects.
+            let linked: BTreeSet<&str> = out
+                .edges
+                .iter()
+                .flat_map(|e| std::iter::once(e.subject.as_str()).chain(e.object_entity.as_deref()))
+                .collect();
+            let keep: BTreeSet<String> = linked.into_iter().map(String::from).collect();
+            out.nodes.retain(|n| keep.contains(&n.id));
+        }
         Ok(out)
     }
 
@@ -1693,6 +1980,7 @@ impl Knowledge {
         access: &Access,
         req: &IndexRequest,
     ) -> Result<IndexView> {
+        let scope = self.scope(corpus, access).await?;
         for _ in 0..3 {
             let parts: Vec<(String, i64)> = self
                 .ledger
@@ -1703,10 +1991,16 @@ impl Knowledge {
                 .collect();
             let mut built: Vec<(String, IndexInputs)> = Vec::new();
             for (p, generation) in &parts {
-                built.push((
-                    p.clone(),
-                    self.partition_index(corpus, p, *generation).await?,
-                ));
+                let inputs = match &scope.list {
+                    // Filtered views are built per request, never cached.
+                    Some(list) => normalize(
+                        self.ledger
+                            .index_inputs(corpus, p, Some(list.as_slice()))
+                            .await?,
+                    ),
+                    None => self.partition_index(corpus, p, *generation).await?,
+                };
+                built.push((p.clone(), inputs));
             }
             // If anything was written meanwhile, rebuild rather than serve a
             // view that may include something just erased.
@@ -1750,7 +2044,7 @@ impl Knowledge {
         {
             return Ok(inputs);
         }
-        let inputs = normalize(self.ledger.index_inputs(corpus, partition).await?);
+        let inputs = normalize(self.ledger.index_inputs(corpus, partition, None).await?);
         let body =
             serde_json::to_string(&inputs).map_err(|e| KnowledgeError::Storage(e.to_string()))?;
         self.ledger
@@ -1773,38 +2067,17 @@ impl Knowledge {
         let Some(report) = self.ledger.purge_source(corpus, source_id, now).await? else {
             return Ok(None);
         };
-        let mut out = ForgetReport {
+        let (vectors_deleted, vectors_deferred) = self
+            .clean_projection(corpus, &report, &report.point_ids, now)
+            .await?;
+        Ok(Some(ForgetReport {
             episodes: report.episodes,
             chunks: report.chunks,
             facts_deleted: report.facts_deleted,
             facts_kept: report.facts_kept,
-            vectors_deleted: 0,
-            vectors_deferred: 0,
-        };
-        if let Some((index, _)) = &self.vectors
-            && !report.point_ids.is_empty()
-        {
-            let ns = namespace(corpus, &report.partition);
-            match index
-                .delete_points(&self.config.collection, &ns, &report.point_ids)
-                .await
-            {
-                Ok(()) => out.vectors_deleted = report.point_ids.len(),
-                Err(_) => {
-                    let jobs: Vec<NewJob> = report
-                        .point_ids
-                        .iter()
-                        .map(|id| NewJob {
-                            kind: JobKind::Unproject,
-                            target: format!("{ns}\u{1f}{id}"),
-                        })
-                        .collect();
-                    self.ledger.enqueue(corpus, &jobs, now).await?;
-                    out.vectors_deferred = jobs.len();
-                }
-            }
-        }
-        Ok(Some(out))
+            vectors_deleted,
+            vectors_deferred,
+        }))
     }
 
     /// Remove a whole corpus from the ledger and the vector projection.
@@ -1858,7 +2131,7 @@ pub fn day(y: i32, m: u32, d: u32) -> DateTime<Utc> {
         .expect("valid date")
 }
 
-fn chunk_citation(c: &Chunk, title: String) -> Citation {
+fn chunk_citation(c: &Chunk, (title, metadata): Label) -> Citation {
     Citation {
         reference: format!("keep:{}", c.id),
         source_id: c.source_id.clone(),
@@ -1869,6 +2142,7 @@ fn chunk_citation(c: &Chunk, title: String) -> Citation {
         char_start: c.char_start,
         char_end: c.char_end,
         quote: c.text.clone(),
+        source_metadata: metadata,
     }
 }
 
@@ -1877,7 +2151,7 @@ fn chunk_hit_titled(
     item: &ItemRef,
     score: f32,
     c: &Chunk,
-    title: String,
+    label: Label,
 ) -> Hit {
     let text = render_chunk(c);
     Hit {
@@ -1889,6 +2163,6 @@ fn chunk_hit_titled(
         source_id: c.source_id.clone(),
         occurred_at: c.occurred_at,
         fact: None,
-        citation: chunk_citation(c, title),
+        citation: chunk_citation(c, label),
     }
 }

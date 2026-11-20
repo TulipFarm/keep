@@ -365,6 +365,222 @@ async fn shared_memory_scenario(svc: &KeepService) {
     assert!(export["files"].as_array().unwrap().is_empty(), "{export}");
 }
 
+/// A host application: long composite scope ids, per-read source
+/// allowlists, source metadata and replacing a source with a new revision.
+async fn host_scenario(svc: &KeepService) {
+    let ws = "ws-3f2b9c1e-8d4a-4f6b-9e2d-1a7c5b3e9f00";
+    let member = format!("{ws}-m-0b8e6d4c-2a1f-4e3d-8c5b-7a9f1e2d3c4b");
+    let scope = json!({ "user": ws, "project": member });
+    let ingest = |id: &str, collection: &str, text: &str, extra: Value| {
+        let mut a = json!({ "scope": scope, "source_id": id, "collection": collection,
+                            "title": id, "text": text });
+        for (k, v) in extra.as_object().unwrap() {
+            a[k] = v.clone();
+        }
+        a
+    };
+    let doc_a = ok(
+        svc,
+        "knowledge_ingest",
+        ingest(
+            "doc-a",
+            "handbook",
+            "The quarterly offsite is held in Lisbon. Parking passes come from the front desk.",
+            json!({ "metadata": { "url": "https://docs.example/a", "doc": "a" } }),
+        ),
+    )
+    .await;
+    assert_eq!(doc_a["replaced"], false, "{doc_a}");
+    ok(
+        svc,
+        "knowledge_ingest",
+        ingest(
+            "doc-b",
+            "policies",
+            "The quarterly offsite budget is approved by finance. Lisbon hotels are booked early.",
+            json!({}),
+        ),
+    )
+    .await;
+    let sources = |v: &Value| -> Vec<String> {
+        let mut s: Vec<String> = v["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["source_id"].as_str().unwrap().to_owned())
+            .collect();
+        s.sort();
+        s.dedup();
+        s
+    };
+    let query = "quarterly offsite Lisbon";
+    let all = ok(
+        svc,
+        "knowledge_search",
+        json!({ "scope": scope, "query": query }),
+    )
+    .await;
+    assert_eq!(sources(&all), ["doc-a", "doc-b"], "{all}");
+
+    // The allowlist narrows retrieval; metadata rides on the citation.
+    let only_a = ok(
+        svc,
+        "knowledge_search",
+        json!({ "scope": scope, "query": query, "source_ids": ["doc-a"], "limit": 1 }),
+    )
+    .await;
+    assert_eq!(sources(&only_a), ["doc-a"], "{only_a}");
+    assert_eq!(
+        only_a["hits"][0]["citation"]["source_metadata"]["url"],
+        "https://docs.example/a"
+    );
+    let by_collection = ok(
+        svc,
+        "knowledge_search",
+        json!({ "scope": scope, "query": query, "collections": ["policies"] }),
+    )
+    .await;
+    assert_eq!(sources(&by_collection), ["doc-b"], "{by_collection}");
+    let none = ok(
+        svc,
+        "knowledge_search",
+        json!({ "scope": scope, "query": query, "source_ids": [] }),
+    )
+    .await;
+    assert!(none["hits"].as_array().unwrap().is_empty(), "{none}");
+
+    // A hit outside the allowlist reads exactly like a missing id.
+    let b_hit = all["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["source_id"] == "doc-b")
+        .unwrap()["item"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for tool in ["knowledge_fetch", "knowledge_cite"] {
+        let hidden = err(
+            svc,
+            tool,
+            json!({ "scope": scope, "id": b_hit, "source_ids": ["doc-a"] }),
+        )
+        .await;
+        let missing = err(
+            svc,
+            tool,
+            json!({ "scope": scope, "id": "chunk_missing", "source_ids": ["doc-a"] }),
+        )
+        .await;
+        assert_eq!(hidden.code, ErrorCode::NotFound, "{tool}");
+        assert_eq!(
+            hidden.message.replace(&b_hit, "ID"),
+            missing.message.replace("chunk_missing", "ID"),
+            "{tool}"
+        );
+        ok(
+            svc,
+            tool,
+            json!({ "scope": scope, "id": b_hit, "source_ids": ["doc-b"] }),
+        )
+        .await;
+    }
+    let index = ok(
+        svc,
+        "knowledge_index",
+        json!({ "scope": scope, "level": 1, "source_ids": ["doc-a"] }),
+    )
+    .await;
+    assert_eq!(index["coverage"]["sources"], 1, "{index}");
+    ok(
+        svc,
+        "knowledge_traverse",
+        json!({ "scope": scope, "start": "Lisbon", "source_ids": ["doc-a"] }),
+    )
+    .await;
+    let e = err(
+        svc,
+        "knowledge_search",
+        json!({ "scope": scope, "query": query,
+                "source_ids": vec!["x"; 1001] }),
+    )
+    .await;
+    assert_eq!(e.code, ErrorCode::Invalid);
+
+    // A new revision of the same source replaces the old text.
+    let changed = "The quarterly offsite moved to Porto this year.";
+    let e = err(
+        svc,
+        "knowledge_ingest",
+        ingest("doc-a", "handbook", changed, json!({})),
+    )
+    .await;
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    let revised = ok(
+        svc,
+        "knowledge_ingest",
+        ingest(
+            "doc-a",
+            "handbook",
+            changed,
+            json!({ "replace": true, "metadata": { "url": "https://docs.example/a?v=2" } }),
+        ),
+    )
+    .await;
+    assert_eq!(revised["replaced"], true, "{revised}");
+    let after = ok(
+        svc,
+        "knowledge_search",
+        json!({ "scope": scope, "query": "offsite Lisbon Porto", "source_ids": ["doc-a"] }),
+    )
+    .await;
+    let texts: Vec<&str> = after["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["text"].as_str().unwrap())
+        .collect();
+    assert!(texts.iter().any(|t| t.contains("Porto")), "{after}");
+    assert!(!texts.iter().any(|t| t.contains("Lisbon")), "{after}");
+    assert_eq!(
+        after["hits"][0]["citation"]["source_metadata"]["url"],
+        "https://docs.example/a?v=2"
+    );
+    let same = ok(
+        svc,
+        "knowledge_ingest",
+        ingest(
+            "doc-a",
+            "handbook",
+            changed,
+            json!({ "replace": true, "metadata": { "url": "https://docs.example/a?v=2" } }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        same["replaced"], false,
+        "an unchanged revision is a no-op: {same}"
+    );
+
+    let e = err(
+        svc,
+        "knowledge_ingest",
+        ingest(
+            "doc-c",
+            "handbook",
+            "text",
+            json!({ "metadata": { "k": "v".repeat(2000) } }),
+        ),
+    )
+    .await;
+    assert_eq!(e.code, ErrorCode::Invalid);
+}
+
+#[tokio::test]
+async fn in_memory_host_scenario() {
+    host_scenario(&in_memory()).await;
+}
+
 #[tokio::test]
 async fn in_memory_scopes_share_and_isolate() {
     shared_memory_scenario(&in_memory()).await;
@@ -594,6 +810,7 @@ fn args(storage: StorageProfile, pg: &str, qdrant: Option<&str>, name: &str) -> 
         evidence_budget_tokens: None,
         evidence_budget_window_secs: 3600,
         evidence_budget_per: BudgetPer::Token,
+        model: Default::default(),
     }
 }
 
@@ -636,6 +853,7 @@ async fn run_db(storage: StorageProfile, pg: &str, qdrant: Option<&str>) {
             let a = args(storage, &pg, qdrant.as_deref(), &name);
             let svc = KeepService::open(&a).await.unwrap();
             shared_memory_scenario(&svc).await;
+            host_scenario(&svc).await;
             drop(svc);
             // A second process sees what the first one wrote.
             let first = KeepService::open(&a).await.unwrap();

@@ -41,6 +41,7 @@ fn source(id: &str, partition: &str, collection: &str, title: &str) -> SourceInp
         collection: collection.into(),
         title: title.into(),
         kind: SourceKind::Conversation,
+        metadata: Default::default(),
     }
 }
 
@@ -131,6 +132,10 @@ async fn suite(label: &str, env: &Env) {
     table_of_contents(env).await;
     eprintln!("[{label}] projection rebuild");
     projection_rebuild(env).await;
+    eprintln!("[{label}] source allowlist");
+    source_allowlist(env).await;
+    eprintln!("[{label}] source revision");
+    source_revision(env).await;
 }
 
 async fn idempotent_ingest(env: &Env) {
@@ -372,7 +377,7 @@ async fn external_claims(env: &Env) {
         .expect("user entity");
     let mut facts = k
         .ledger()
-        .facts_about(c, &["team".to_string()], &user.id, 50)
+        .facts_about(c, &["team".to_string()], &user.id, 50, None)
         .await
         .unwrap();
     facts.sort_by(|a, b| a.object.cmp(&b.object));
@@ -820,6 +825,348 @@ async fn forget(env: &Env) {
     for w in ["drop", "Garden", "Juniper", "Lena", "forget"] {
         assert!(!dump.contains(w), "journal holds {w}");
     }
+    k.delete_corpus(c).await.unwrap();
+}
+
+fn only(ids: &[&str]) -> Access {
+    everyone().only_sources(ids.iter().copied())
+}
+
+async fn source_allowlist(env: &Env) {
+    let k = &env.k;
+    let c = "allow";
+    env.clock.set(day(2024, 7, 1));
+    // More matching noise than the candidate pool, so a post-filter would
+    // starve the allowed result.
+    k.ingest(
+        c,
+        source("crowd", "team", "noise", "Noise"),
+        (0..70)
+            .map(|i| {
+                turn(
+                    &format!("n{i}"),
+                    day(2024, 7, 1),
+                    &format!("Heron budget heron budget review item {i}."),
+                )
+            })
+            .collect(),
+    )
+    .await
+    .unwrap();
+    k.ingest(
+        c,
+        source("keep", "team", "docs", "Budget memo"),
+        vec![
+            turn("k1", day(2024, 7, 2), "The Heron budget memo was signed."),
+            turn(
+                "k2",
+                day(2024, 7, 2),
+                "Tomas Reyes works at Northwind Labs.",
+            ),
+            turn("k3", day(2024, 7, 2), "Mira Sato leads Project Heron."),
+        ],
+    )
+    .await
+    .unwrap();
+    k.ingest(
+        c,
+        source("other", "team", "docs", "Juniper notes"),
+        vec![
+            turn(
+                "o1",
+                day(2024, 7, 3),
+                "Tomas Reyes works at Northwind Labs.",
+            ),
+            turn("o2", day(2024, 7, 3), "Lena Park leads Project Juniper."),
+        ],
+    )
+    .await
+    .unwrap();
+    k.run_jobs(c, 20).await.unwrap();
+    let search = |access: Access, q: &str| {
+        let req = SearchRequest {
+            limit: 3,
+            ..search_req(c, access, q, AsOf::now())
+        };
+        async move {
+            k.search(&req, &mut EvidenceAllowance::default())
+                .await
+                .unwrap()
+                .hits
+        }
+    };
+
+    // The allowed source is found despite the noise outranking it.
+    let hits = search(only(&["keep"]), "heron budget").await;
+    assert!(
+        hits.iter().any(|h| h.text.contains("memo was signed")),
+        "{hits:?}"
+    );
+    assert!(hits.iter().all(|h| h.source_id == "keep"), "{hits:?}");
+    assert!(hits.iter().all(|h| h.citation.source_id == "keep"));
+    let unfiltered = search(everyone(), "heron budget").await;
+    assert!(unfiltered.iter().all(|h| h.source_id == "crowd"));
+
+    // Collections narrow the same way; combined with ids, both must hold.
+    let docs = everyone().only_collections(["docs"]);
+    let hits = search(docs.clone(), "heron budget").await;
+    assert!(!hits.is_empty());
+    assert!(hits.iter().all(|h| h.source_id == "keep"), "{hits:?}");
+    let both = docs.only_sources(["other", "crowd"]);
+    let hits = search(both, "heron budget memo").await;
+    assert!(hits.iter().all(|h| h.source_id == "other"), "{hits:?}");
+
+    // An empty allowlist shows nothing.
+    assert!(search(only(&[]), "heron budget").await.is_empty());
+    assert!(
+        search(everyone().only_collections(Vec::<String>::new()), "heron")
+            .await
+            .is_empty()
+    );
+
+    // A fact both sources support shows only allowed evidence.
+    let hits = search(only(&["other"]), "Tomas Reyes Northwind Labs").await;
+    let fact = hits
+        .iter()
+        .find(|h| matches!(h.item, ItemRef::Fact(_)))
+        .expect("fact hit");
+    assert_eq!(fact.citation.source_id, "other");
+    let fid = fact.item.point_id();
+    let fetched = k
+        .fetch(
+            c,
+            &only(&["other"]),
+            &fid,
+            AsOf::now(),
+            &mut EvidenceAllowance::default(),
+        )
+        .await
+        .unwrap();
+    let Fetched::Fact {
+        fact, citations, ..
+    } = fetched.item
+    else {
+        panic!("fact id fetched a chunk")
+    };
+    assert!(!fact.evidence.is_empty());
+    assert!(fact.evidence.iter().all(|e| e.source_id == "other"));
+    assert!(citations.iter().all(|c| c.source_id == "other"));
+    let all = k.cite(c, &everyone(), &fid).await.unwrap();
+    assert_eq!(
+        all.iter()
+            .map(|c| c.source_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        2
+    );
+    let cited = k.cite(c, &only(&["keep"]), &fid).await.unwrap();
+    assert!(!cited.is_empty());
+    assert!(cited.iter().all(|c| c.source_id == "keep"));
+
+    // Outside the allowlist reads exactly like a missing id.
+    let other_ev = all
+        .iter()
+        .find(|c| c.source_id == "other")
+        .unwrap()
+        .reference
+        .trim_start_matches("keep:")
+        .to_string();
+    let other_chunk = search(only(&["other"]), "Lena Park Juniper")
+        .await
+        .into_iter()
+        .find(|h| matches!(h.item, ItemRef::Chunk(_)))
+        .expect("chunk hit")
+        .item
+        .point_id();
+    for id in [fid.as_str(), other_chunk.as_str(), other_ev.as_str()] {
+        let crowd = only(&["crowd"]);
+        assert!(matches!(
+            k.cite(c, &crowd, id).await,
+            Err(KnowledgeError::NotFound)
+        ));
+        if !id.starts_with("ev_") {
+            let f = k
+                .fetch(
+                    c,
+                    &crowd,
+                    id,
+                    AsOf::now(),
+                    &mut EvidenceAllowance::default(),
+                )
+                .await;
+            assert!(matches!(f, Err(KnowledgeError::NotFound)), "{id}");
+        }
+    }
+
+    // Traversal only follows allowed facts and shows their entities.
+    let none = k
+        .traverse(c, &only(&["crowd"]), "Tomas Reyes", 2, 10, AsOf::now())
+        .await
+        .unwrap();
+    assert!(none.nodes.is_empty() && none.edges.is_empty(), "{none:?}");
+    let g = k
+        .traverse(c, &only(&["other"]), "Tomas Reyes", 2, 10, AsOf::now())
+        .await
+        .unwrap();
+    assert!(!g.edges.is_empty());
+    let names: Vec<&str> = g.nodes.iter().map(|n| n.name.as_str()).collect();
+    assert!(names.contains(&"Northwind Labs"), "{names:?}");
+
+    // The index covers only allowed sources and what their evidence says.
+    let level2 = IndexRequest {
+        level: 2,
+        ..Default::default()
+    };
+    let view = k.index(c, &only(&["keep"]), &level2).await.unwrap();
+    let dump = format!("{} {:?}", view.text, view.entries);
+    assert_eq!(view.coverage.sources, 1);
+    for w in ["Juniper", "Lena Park"] {
+        assert!(!dump.contains(w), "filtered index shows {w}: {dump}");
+    }
+    assert!(dump.contains("Tomas Reyes"), "{dump}");
+    let toc = k
+        .index(c, &only(&[]), &IndexRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(toc.coverage.sources, 0);
+    // The unfiltered index is unaffected by filtered reads.
+    let full = k.index(c, &everyone(), &level2).await.unwrap();
+    assert_eq!(full.coverage.sources, 3);
+    assert!(format!("{:?}", full.entries).contains("Lena Park"));
+    k.delete_corpus(c).await.unwrap();
+}
+
+async fn source_revision(env: &Env) {
+    let k = &env.k;
+    let c = "revise";
+    env.clock.set(day(2024, 8, 1));
+    let doc = |rev: &str| SourceInput {
+        metadata: [
+            ("url".to_string(), "https://example.com/doc/1".to_string()),
+            ("revision".to_string(), rev.to_string()),
+        ]
+        .into(),
+        ..source("doc", "team", "docs", "Handbook")
+    };
+    let first = k
+        .ingest_revision(
+            c,
+            doc("1"),
+            vec![turn("p1", day(2024, 8, 1), "Ravi Menon works at Contoso.")],
+        )
+        .await
+        .unwrap();
+    assert!(first.source_created && !first.replaced);
+    k.run_jobs(c, 10).await.unwrap();
+    let hits = k
+        .search(
+            &search_req(c, everyone(), "Ravi Menon Contoso", AsOf::now()),
+            &mut EvidenceAllowance::default(),
+        )
+        .await
+        .unwrap()
+        .hits;
+    assert!(!hits.is_empty());
+    assert!(hits.iter().all(|h| {
+        h.citation.source_metadata.get("url").map(String::as_str)
+            == Some("https://example.com/doc/1")
+    }));
+    // Plain ingest of different content under the same ids is refused.
+    let clash = k
+        .ingest(
+            c,
+            doc("1"),
+            vec![turn("p1", day(2024, 8, 2), "Ravi Menon works at Fabrikam.")],
+        )
+        .await;
+    assert!(
+        matches!(clash, Err(KnowledgeError::Conflict(_))),
+        "{clash:?}"
+    );
+    let meta_clash = k.ingest(c, doc("2"), vec![]).await;
+    assert!(matches!(meta_clash, Err(KnowledgeError::Conflict(_))));
+
+    // A revision replaces the old content atomically: before any job runs,
+    // no read shows the old text.
+    env.clock.set(day(2024, 8, 2));
+    let second = k
+        .ingest_revision(
+            c,
+            doc("2"),
+            vec![turn("p1", day(2024, 8, 2), "Ravi Menon works at Fabrikam.")],
+        )
+        .await
+        .unwrap();
+    assert!(second.replaced && !second.source_created, "{second:?}");
+    assert_eq!(second.episodes_added, 1);
+    let old = k
+        .search(
+            &search_req(c, everyone(), "Contoso", AsOf::now()),
+            &mut EvidenceAllowance::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        old.hits.iter().all(|h| !h.text.contains("Contoso")),
+        "{:?}",
+        old.hits
+    );
+    k.run_jobs(c, 10).await.unwrap();
+    let hits = k
+        .search(
+            &search_req(c, everyone(), "Ravi Menon Fabrikam", AsOf::now()),
+            &mut EvidenceAllowance::default(),
+        )
+        .await
+        .unwrap()
+        .hits;
+    assert!(hits.iter().any(|h| h.text.contains("Fabrikam")));
+    assert!(hits.iter().all(|h| !h.text.contains("Contoso")));
+    assert!(hits.iter().all(|h| {
+        h.citation
+            .source_metadata
+            .get("revision")
+            .map(String::as_str)
+            == Some("2")
+    }));
+    let src = k.ledger().source(c, "doc").await.unwrap().unwrap();
+    assert_eq!(src.metadata.get("revision").map(String::as_str), Some("2"));
+    // No stale vectors remain.
+    let point_ids = k.ledger().point_ids(c).await.unwrap();
+    let probe = keep_providers::HashEmbedder::new(256);
+    let q = keep_providers::Embedder::embed(&probe, &["Ravi Menon".to_string()])
+        .await
+        .unwrap()
+        .vectors
+        .remove(0);
+    let vectors = k
+        .vectors()
+        .unwrap()
+        .search(&k.config().collection, &namespace(c, "team"), &q, 100)
+        .await
+        .unwrap();
+    assert_eq!(vectors.len(), point_ids.len());
+    let journal = k.ledger().erasure_journal().await.unwrap();
+    assert!(journal.iter().any(|e| e.target_kind == "source"));
+
+    // Sending the current revision again changes nothing.
+    let same = k
+        .ingest_revision(
+            c,
+            doc("2"),
+            vec![turn("p1", day(2024, 8, 2), "Ravi Menon works at Fabrikam.")],
+        )
+        .await
+        .unwrap();
+    assert!(!same.replaced && same.episodes_unchanged == 1, "{same:?}");
+
+    // Metadata is bounded.
+    let mut big = doc("3");
+    big.metadata = (0..17).map(|i| (format!("k{i}"), "v".into())).collect();
+    assert!(matches!(
+        k.ingest_revision(c, big, vec![]).await,
+        Err(KnowledgeError::Invalid(_))
+    ));
     k.delete_corpus(c).await.unwrap();
 }
 

@@ -63,6 +63,15 @@ than hidden.
 4. Session-level extraction ([`session_extract`](../crates/keep-knowledge/src/session_extract.rs))
    lets a model read a whole session at once, which the per-episode rules
    cannot. See [Session fact extraction](#session-fact-extraction).
+   `Knowledge::with_session_extractor` puts the same extractor in the job
+   queue instead of the rules: each episode is read alone, in windows of at
+   most 8 turns of 4,000 characters, and model failures become retried or
+   failed jobs. The server enables it when a chat model is configured
+   ([server docs](server.md#model-backed-extraction-and-summaries)).
+5. `ingest_revision` replaces a source whose text or metadata changed: the
+   old episodes, chunks, vectors and evidence go and the new ones arrive in
+   one ledger transaction, so reads never see both revisions. Plain
+   `ingest` refuses changed text under an existing episode id.
 
 ### Contradictions
 
@@ -204,6 +213,18 @@ Other read tools:
 - `cite`: stable citations (source, episode, character span, quote) for a
   result.
 - `traverse`: the facts around an entity, limited in depth and fan-out.
+
+### Source allowlists
+
+`Access::only_sources` and `Access::only_collections` narrow a read to
+evidence from some sources. Search applies them inside retrieval: lexical
+queries filter by source, and vectors carry a per-source tag that pgvector
+and Qdrant filter on, so the allowlist cuts candidates before ranking,
+limits and the evidence allowance rather than after. A fact supported by
+several sources is visible when one of them is allowed and shows only the
+allowed evidence. Fetch and cite treat anything outside the allowlist as
+missing. Vectors projected before tags existed need
+`rebuild_projection` before vector search can match them under a filter.
 
 ### Evidence allowance
 
