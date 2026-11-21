@@ -116,7 +116,7 @@ the subcommand.
 | `--project` | `KEEP_PROJECT` | none | Default project |
 | `--agent` | `KEEP_AGENT` | none | Recorded as the harness on each Memory revision, such as `codex` |
 | `--tokenizer` | `KEEP_TOKENIZER` | `tiktoken-o200k-base` | Budget tokenizer: `tiktoken-o200k-base`, `tiktoken-cl100k-base` or `approx-v1` |
-| `--no-profile-writes` | `KEEP_NO_PROFILE_WRITES` | off | Refuse writes to `/profile.md` |
+| `--no-profile-writes` | `KEEP_NO_PROFILE_WRITES` | off | Refuse placing files in the You category (`/profile.md`, `/you/<slug>.md`) |
 | `--embedder` | `KEEP_EMBEDDER` | `local` if built with `local-embeddings`, else `hash` | Knowledge embedder; see [Embeddings](#embeddings) |
 | `--data-dir` | `KEEP_DATA_DIR` | platform data dir | Receipt key and model cache; see [Receipts](#receipts-and-the-data-directory) |
 | | `KEEP_MODEL_CACHE` | `<data-dir>/models` | Where the local model is downloaded; `/opt/keep/models` (baked in) in the image |

@@ -8,6 +8,7 @@
 //! | Path | Category |
 //! | --- | --- |
 //! | `/profile.md` | `you` |
+//! | `/you/<slug>.md` | `you` |
 //! | `/topics/<slug>.md` | `topics` |
 //! | `/areas/<slug>.md` | `areas` |
 //! | `/people/<slug>.md` | `people` |
@@ -88,7 +89,7 @@ pub fn infer(path: &MemoryPath) -> Result<(Option<String>, Option<String>)> {
     let segments: Vec<&str> = path.as_str()[1..].split('/').collect();
     let cat = |c: &str| Some(c.to_owned());
     Ok(match segments.as_slice() {
-        ["profile.md"] => (cat("you"), None),
+        ["profile.md"] | ["you", _] => (cat("you"), None),
         ["topics", _] => (cat("topics"), None),
         ["areas", _] => (cat("areas"), None),
         ["people", _] => (cat("people"), None),
@@ -142,6 +143,11 @@ mod tests {
             infer(&p("/profile.md")).unwrap(),
             (Some("you".into()), None)
         );
+        assert_eq!(
+            infer(&p("/you/about.md")).unwrap(),
+            (Some("you".into()), None)
+        );
+        assert_eq!(infer(&p("/you/a/b.md")).unwrap(), (None, None));
         assert_eq!(
             infer(&p("/topics/rust.md")).unwrap().0.as_deref(),
             Some("topics")

@@ -19,6 +19,7 @@ at stable paths:
 | Path | Category | Used for |
 | --- | --- | --- |
 | `/profile.md` | You | Standing facts and preferences, always considered for context |
+| `/you/<slug>.md` | You | More standing files about the user, such as who they are |
 | `/topics/<slug>.md` | Topics | Subjects that come up repeatedly |
 | `/areas/<slug>.md` | Areas | Ongoing responsibilities |
 | `/people/<slug>.md` | People | Notes about people the user works with |
