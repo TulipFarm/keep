@@ -984,14 +984,22 @@ impl KeepService {
         })
     }
 
-    /// The scope's enrichment state, or `unknown` when it cannot be read.
+    /// The scope's enrichment state after a write, or `unknown` when it cannot
+    /// be read. Finished jobs are not counted, so `jobs` has no `succeeded`;
+    /// `knowledge_status` reports it.
     async fn enrichment(&self, scope: &Scope) -> Value {
         match self
             .knowledge
-            .job_counts(&scope.corpus(), &scope.partition())
+            .unfinished_job_counts(&scope.corpus(), &scope.partition())
             .await
         {
-            Ok(counts) => enrichment_of(&counts),
+            Ok(counts) => {
+                let mut value = enrichment_of(&counts);
+                if let Some(jobs) = value["jobs"].as_object_mut() {
+                    jobs.remove("succeeded");
+                }
+                value
+            }
             Err(_) => json!({ "state": "unknown" }),
         }
     }

@@ -146,6 +146,11 @@ async fn shared_memory_scenario(svc: &KeepService) {
     assert!(billing["report"]["chunks_added"].as_u64().unwrap() > 0);
     assert_eq!(billing["captured"], true);
     assert_eq!(billing["enrichment"]["state"], "complete", "{billing}");
+    // A write skips finished jobs, so it reports no `succeeded` count.
+    assert!(
+        billing["enrichment"]["jobs"].get("succeeded").is_none(),
+        "{billing}"
+    );
     ok(
         svc,
         "knowledge_ingest",

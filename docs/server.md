@@ -391,6 +391,9 @@ Keep never reports success for work it has not done.
 - `knowledge_status` shows the counts (`pending`, `running`,
   `retryScheduled`, `succeeded`, `failed`) for the caller's own scope, so a
   token limited to one project learns nothing about other projects.
+  `knowledge_ingest` returns the same counts without `succeeded`: finished
+  jobs pile up as a corpus grows, and counting them on every write would
+  slow each write down.
 
 ### Compare-and-swap writes
 
