@@ -138,7 +138,8 @@ pub struct ServiceArgs {
         global = true
     )]
     pub tokenizer: String,
-    /// Refuse writes to the always-included profile (`/profile.md`).
+    /// Refuse placing files in the always-included You category
+    /// (`/profile.md`, `/you/<slug>.md`).
     #[arg(long, env = "KEEP_NO_PROFILE_WRITES", global = true)]
     pub no_profile_writes: bool,
     /// Embedder for Knowledge's vectors: `local` (an on-device ONNX model,
