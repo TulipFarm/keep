@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use keep_knowledge::engine::{EpisodeInput, ExternalClaim, SourceInput, day, namespace};
 use keep_knowledge::extract::{Claim, FactExtractor, RuleExtractor};
-use keep_knowledge::model::{Episode, FactStatus, JobState, TimeBasis};
+use keep_knowledge::model::{Episode, FactStatus, JobCounts, JobState, TimeBasis};
 use keep_knowledge::temporal::ValidMatch;
 use keep_knowledge::{
     Access, AsOf, EvidenceAllowance, Fetched, IndexRequest, ItemRef, Knowledge, KnowledgeConfig,
@@ -1627,6 +1627,15 @@ async fn job_retries(env: Env) {
     let waiting = k.job_counts(c, "team").await.unwrap();
     assert_eq!((waiting.retry_scheduled, waiting.outstanding()), (1, 1));
     assert!(waiting.succeeded >= 1, "projection finished: {waiting:?}");
+    // Unfinished counts skip finished jobs but agree on everything else.
+    let unfinished = k.unfinished_job_counts(c, "team").await.unwrap();
+    assert_eq!(
+        unfinished,
+        JobCounts {
+            succeeded: 0,
+            ..waiting
+        }
+    );
     // Nothing is due until the back-off passes.
     assert!(
         !k.ledger()

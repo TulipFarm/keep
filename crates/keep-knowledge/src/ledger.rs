@@ -296,7 +296,15 @@ pub trait Ledger: Send + Sync {
     /// projection of its chunks and facts, and vector removals from its
     /// namespace `ns`. Jobs of other partitions, and of records since
     /// forgotten, are not counted, so the answer reveals nothing outside it.
-    async fn job_counts(&self, corpus: &str, partition: &str, ns: &str) -> Result<JobCounts>;
+    /// Without `succeeded`, finished jobs are skipped and counted as 0: they
+    /// pile up over a corpus's life, so counting them grows with every write.
+    async fn job_counts(
+        &self,
+        corpus: &str,
+        partition: &str,
+        ns: &str,
+        succeeded: bool,
+    ) -> Result<JobCounts>;
     /// Corpora with at least one job due at `now`, for a background worker.
     async fn due_corpora(&self, now: Time, limit: usize) -> Result<Vec<String>>;
 

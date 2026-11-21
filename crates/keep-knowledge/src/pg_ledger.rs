@@ -1110,13 +1110,30 @@ impl Ledger for PgLedger {
         Ok(state)
     }
 
-    async fn job_counts(&self, corpus: &str, partition: &str, ns: &str) -> Result<JobCounts> {
+    async fn job_counts(
+        &self,
+        corpus: &str,
+        partition: &str,
+        ns: &str,
+        succeeded: bool,
+    ) -> Result<JobCounts> {
         let c = self.client().await?;
+        let states: &[&str] = if succeeded {
+            &[
+                "pending",
+                "running",
+                "retry_scheduled",
+                "succeeded",
+                "failed",
+            ]
+        } else {
+            &["pending", "running", "retry_scheduled", "failed"]
+        };
         let mut counts = JobCounts::default();
         for r in c
             .query(
                 "SELECT j.state, count(*) AS n FROM knowledge_jobs j
-                 WHERE j.corpus = $1 AND CASE j.kind
+                 WHERE j.corpus = $1 AND j.state = ANY($4) AND CASE j.kind
                    WHEN 'extract' THEN EXISTS (SELECT 1 FROM knowledge_episodes e
                      WHERE e.corpus = j.corpus AND e.id = j.target AND e.partition_label = $2)
                    WHEN 'project' THEN EXISTS (SELECT 1 FROM knowledge_chunks k
@@ -1126,7 +1143,7 @@ impl Ledger for PgLedger {
                    WHEN 'unproject' THEN split_part(j.target, chr(31), 1) = $3
                    ELSE false END
                  GROUP BY j.state",
-                &[&corpus, &partition, &ns],
+                &[&corpus, &partition, &ns, &states],
             )
             .await
             .map_err(db)?

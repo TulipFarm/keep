@@ -666,10 +666,20 @@ impl Ledger for MemoryLedger {
         Ok(j.state)
     }
 
-    async fn job_counts(&self, corpus: &str, partition: &str, ns: &str) -> Result<JobCounts> {
+    async fn job_counts(
+        &self,
+        corpus: &str,
+        partition: &str,
+        ns: &str,
+        succeeded: bool,
+    ) -> Result<JobCounts> {
         let s = self.lock();
         let mut counts = JobCounts::default();
-        for j in s.jobs.iter().filter(|j| j.corpus == corpus) {
+        for j in s
+            .jobs
+            .iter()
+            .filter(|j| j.corpus == corpus && (succeeded || j.state != JobState::Succeeded))
+        {
             let k = key(corpus, &j.target);
             let mine = match j.kind {
                 JobKind::Extract => s.episodes.get(&k).is_some_and(|e| e.partition == partition),

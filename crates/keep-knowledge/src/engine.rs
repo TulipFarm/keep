@@ -798,7 +798,15 @@ impl Knowledge {
     /// Background jobs of one partition by state. See [`Ledger::job_counts`].
     pub async fn job_counts(&self, corpus: &str, partition: &str) -> Result<JobCounts> {
         self.ledger
-            .job_counts(corpus, partition, &namespace(corpus, partition))
+            .job_counts(corpus, partition, &namespace(corpus, partition), true)
+            .await
+    }
+
+    /// Like [`Self::job_counts`] without finished jobs, whose `succeeded` is 0.
+    /// Cheap enough for every write, however large the corpus has grown.
+    pub async fn unfinished_job_counts(&self, corpus: &str, partition: &str) -> Result<JobCounts> {
+        self.ledger
+            .job_counts(corpus, partition, &namespace(corpus, partition), false)
             .await
     }
 
