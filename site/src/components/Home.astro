@@ -113,12 +113,13 @@ const first = day("2026-05-01");
     <h2>{install.heading}</h2>
     <p class="lead">{install.lead}</p>
     <div class="does two">
-      {[install.script, install.agent].map((c) => (
+      {[install.agent, install.script].map((c) => (
         <div><h3>{c.title}</h3><p>{c.note}</p>
           <div class="cmdrow"><pre class="term mini"><code set:html={c === install.script ? sh(c.cmd) : esc(c.cmd)} /></pre><button type="button" class="btn cpy" data-copy={c.cmd} aria-label={`Copy: ${c.title}`}>{install.copy}</button></div>
         </div>
       ))}
     </div>
+    <p>{install.links.map(([t, h], i) => <>{i > 0 && " · "}<a class="lnk" href={h}>{t} →</a></>)}</p>
   </section>
 
   <section class="wrap sec" id="where">

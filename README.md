@@ -34,16 +34,26 @@ Rust. It is built around two primitives:
 
 ## Quick start
 
+Paste this into Claude Code, Codex or Copilot CLI:
+
+```text
+Read https://keep.tulipfarm.ai/install.md and install Keep for me.
+```
+
+The agent follows [install.md](https://keep.tulipfarm.ai/install.md): it asks
+where to store memory (Postgres + pgvector, Postgres + Qdrant, or in memory),
+builds Keep, starts it on 127.0.0.1:7357 and connects Claude Code, Codex and
+Copilot CLI if they are installed. Restart your agents afterwards.
+
+Or run the installer yourself:
+
 ```sh
 curl -fsSL https://keep.tulipfarm.ai/install.sh | sh
 ```
 
-The script asks which local database to use (in memory, Postgres + pgvector,
-or Postgres + Qdrant), builds Keep and connects Claude Code, Codex and Copilot
-CLI. Prefer to let your agent do it? Tell it:
-`Install https://keep.tulipfarm.ai/install.md`. For a container, use
-`ghcr.io/tulipfarm/keep`. See [Connecting coding agents](#connecting-coding-agents)
-for the manual steps.
+It asks the same questions. It runs on macOS and Linux, and the Postgres
+options need Docker. For a container, use `ghcr.io/tulipfarm/keep`. See
+[Connecting coding agents](#connecting-coding-agents) for the manual steps.
 
 ## Status: research first
 
@@ -156,7 +166,8 @@ health-gated start-up, use `deploy/compose.yaml`; see
 other MCP clients; `keep serve` exposes the same tools over HTTP on
 `127.0.0.1`. Agents that use the same project share one memory. The
 recommended setup is one `keep serve` daemon, with every agent connected
-through `keep mcp --server`:
+through `keep mcp --server`. The [installer](#quick-start) does this for
+you. To set it up by hand:
 
 ```sh
 cargo install --path crates/keep-server --features local-embeddings
@@ -179,6 +190,7 @@ runs are designed, what the numbers mean and what they cannot tell you.
 
 - Website: <https://keep.tulipfarm.ai>
 - Source: <https://github.com/TulipFarm/keep>
+- Install: [install.md](https://keep.tulipfarm.ai/install.md) (for agents), [install.sh](https://keep.tulipfarm.ai/install.sh)
 - Docs: [Server](docs/server.md), [Memory](docs/memory.md), [Knowledge](docs/knowledge.md), [Benchmark methodology](docs/benchmarks/methodology.md)
 - Built by [TulipFarm](https://tulipfarm.ai)
 

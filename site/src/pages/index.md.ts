@@ -1,4 +1,4 @@
-import { hero, flow, where, sections, faq, meta, repo } from "../data/site";
+import { hero, flow, where, sections, faq, meta, repo, setupPrompt, install } from "../data/site";
 
 const md = `# Keep
 
@@ -7,6 +7,12 @@ ${hero.sub}
 ${hero.note}
 
 Source: ${repo}
+
+## Install
+
+Tell your coding agent: \`${setupPrompt}\`
+
+Or run \`${install.script.cmd}\`. Runs on macOS and Linux.
 
 ## How it works
 
