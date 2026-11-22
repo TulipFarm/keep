@@ -103,7 +103,11 @@ async fn memory_and_knowledge_migrate_into_one_schema_in_either_order() {
         assert_eq!(mem, ["memory_0001_ledger", "memory_0002_erasure_journal"]);
         assert_eq!(
             know,
-            ["knowledge_0001_ledger", "knowledge_0002_source_metadata"]
+            [
+                "knowledge_0001_ledger",
+                "knowledge_0002_source_metadata",
+                "knowledge_0003_episode_cascade_indexes"
+            ]
         );
     }
 }

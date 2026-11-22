@@ -32,11 +32,23 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "knowledge_0002_source_metadata",
         include_str!("../migrations/knowledge_0002_source_metadata.sql"),
     ),
+    (
+        "knowledge_0003_episode_cascade_indexes",
+        include_str!("../migrations/knowledge_0003_episode_cascade_indexes.sql"),
+    ),
 ];
+
+const DUE_CORPORA: &str = "SELECT DISTINCT corpus FROM knowledge_jobs
+     WHERE state IN ('pending', 'retry_scheduled', 'running') AND next_attempt_at <= $1
+     ORDER BY corpus LIMIT $2";
 
 pub struct PgLedger {
     url: String,
     client: Mutex<Client>,
+    /// The readiness probe's own connection, opened on first use. The
+    /// shared one is held for a whole transaction, and a probe queued
+    /// behind a long one reads as a ledger that does not answer.
+    probe: Mutex<Option<Client>>,
 }
 
 fn db(e: impl std::fmt::Display) -> KnowledgeError {
@@ -52,6 +64,7 @@ impl PgLedger {
         Ok(Self {
             url: url.into(),
             client: Mutex::new(client),
+            probe: Mutex::new(None),
         })
     }
 
@@ -1153,19 +1166,25 @@ impl Ledger for PgLedger {
         Ok(counts)
     }
 
+    async fn probe(&self, now: Time) -> Result<()> {
+        let mut slot = self.probe.lock().await;
+        let c = match slot.take() {
+            Some(c) if !c.is_closed() => c,
+            _ => open(&self.url).await?,
+        };
+        let answered = c.query(DUE_CORPORA, &[&now, &1i64]).await;
+        *slot = Some(c);
+        answered.map(|_| ()).map_err(db)
+    }
+
     async fn due_corpora(&self, now: Time, limit: usize) -> Result<Vec<String>> {
         let c = self.client().await?;
-        Ok(c.query(
-            "SELECT DISTINCT corpus FROM knowledge_jobs
-             WHERE state IN ('pending', 'retry_scheduled', 'running') AND next_attempt_at <= $1
-             ORDER BY corpus LIMIT $2",
-            &[&now, &(limit as i64)],
-        )
-        .await
-        .map_err(db)?
-        .iter()
-        .map(|r| r.get(0))
-        .collect())
+        Ok(c.query(DUE_CORPORA, &[&now, &(limit as i64)])
+            .await
+            .map_err(db)?
+            .iter()
+            .map(|r| r.get(0))
+            .collect())
     }
 
     async fn jobs(&self, corpus: &str) -> Result<Vec<Job>> {

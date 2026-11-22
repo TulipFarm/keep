@@ -307,6 +307,12 @@ pub trait Ledger: Send + Sync {
     ) -> Result<JobCounts>;
     /// Corpora with at least one job due at `now`, for a background worker.
     async fn due_corpora(&self, now: Time, limit: usize) -> Result<Vec<String>>;
+    /// Check the ledger answers, for a readiness probe. A backend whose
+    /// operations hold a connection for a whole transaction must not make
+    /// the probe wait behind one.
+    async fn probe(&self, now: Time) -> Result<()> {
+        self.due_corpora(now, 1).await.map(|_| ())
+    }
 
     // Book index.
     /// Partition labels with their write generation.
