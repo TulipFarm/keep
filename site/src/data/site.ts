@@ -13,13 +13,14 @@ export const meta = {
     "Keep is open-source memory and knowledge for AI agents, over MCP. Old facts are marked, not erased. Apache-2.0 research preview. Runs on your machine.",
 };
 
-export const setupPrompt = "Install https://keep.tulipfarm.ai/install.md";
+export const setupPrompt = "Read https://keep.tulipfarm.ai/install.md and install Keep for me.";
 
 export const install = {
   heading: "Install in one step",
-  lead: "Keep asks which database to use, then connects your coding agents.",
-  script: { title: "Run the script", cmd: "curl -fsSL https://keep.tulipfarm.ai/install.sh | sh", note: "Builds Keep with Rust. You pick in memory, Postgres + pgvector, or Postgres + Qdrant." },
-  agent: { title: "Or ask your agent", cmd: setupPrompt, note: "Works in Claude Code, Codex and Copilot CLI. The agent follows the install file and asks you the same question." },
+  lead: "Keep asks where to store memory, then connects your coding agents. Runs on macOS and Linux.",
+  agent: { title: "Ask your agent", cmd: setupPrompt, note: "Paste this into Claude Code, Codex or Copilot CLI. Your agent runs the installer, then checks that Keep is working." },
+  script: { title: "Or run the script", cmd: "curl -fsSL https://keep.tulipfarm.ai/install.sh | sh", note: "Installs Rust if needed and builds Keep from source. The first build takes a few minutes. The Postgres options need Docker." },
+  links: [["Read install.md", "/install.md"], ["View install.sh", "/install.sh"]] as [string, string][],
   copy: "Copy",
   copied: "Copied",
 };
@@ -177,11 +178,11 @@ export const faq: [string, string][] = [
   ],
   [
     "Which agents and models does Keep work with?",
-    "Claude Code, Codex and Copilot CLI have setup steps in the docs. Any MCP client that can start a stdio server works too. Keep sets no chat model for you. Your agent keeps its own.",
+    "Claude Code, Codex and Copilot CLI. The installer connects each one that is installed. Any MCP client that can start a stdio server works too. Keep sets no chat model for you. Your agent keeps its own.",
   ],
   [
     "Can I run Keep myself?",
-    "Yes. Install it from source with `cargo install`, run `keep serve` on your machine, and keep memory in process or in your own Postgres. Docker Compose files are in the repo.",
+    "Yes. Ask your coding agent to follow install.md, or run install.sh yourself. Both build Keep on your machine and store memory in process or in a local Postgres. To build by hand, use `cargo install`. Docker Compose files are in the repo.",
   ],
   ["Is Keep open source?", "Yes. Keep is Apache-2.0 and the code is public on GitHub."],
   [
