@@ -2012,6 +2012,63 @@ async fn postgres_vector_profile() {
     .await;
 }
 
+/// The readiness probe answers while a ledger operation holds the shared
+/// connection, as forgetting a source with many episodes does for minutes,
+/// and the migrations index the episode cascades that made it slow.
+#[tokio::test]
+async fn postgres_probe_answers_while_the_ledger_is_busy() {
+    use keep_knowledge::ledger::Ledger;
+    use keep_knowledge::pg_ledger::PgLedger;
+    use std::time::Duration;
+
+    let Ok(admin) = std::env::var("KEEP_TEST_POSTGRES_URL") else {
+        eprintln!("skipping: KEEP_TEST_POSTGRES_URL is not set");
+        return;
+    };
+    let (schema, url) = PgSchema::create(&admin).await;
+    guarded(
+        async move {
+            let ledger = Arc::new(PgLedger::connect(&url).await.unwrap());
+            let other = keep_postgres::connect(&url).await.unwrap();
+            let indexes: Vec<String> = other
+                .query(
+                    "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()
+                       AND indexname IN ('knowledge_chunks_episode', 'knowledge_evidence_episode')
+                     ORDER BY indexname",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.get(0))
+                .collect();
+            assert_eq!(
+                indexes,
+                ["knowledge_chunks_episode", "knowledge_evidence_episode"]
+            );
+
+            other
+                .batch_execute("BEGIN; LOCK TABLE knowledge_sources IN ACCESS EXCLUSIVE MODE")
+                .await
+                .unwrap();
+            let busy = {
+                let ledger = ledger.clone();
+                tokio::spawn(async move { ledger.source("c", "s").await.map(|_| ()) })
+            };
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert!(!busy.is_finished(), "the shared connection is held");
+            tokio::time::timeout(Duration::from_secs(2), ledger.probe(chrono::Utc::now()))
+                .await
+                .expect("the probe waited behind the busy connection")
+                .unwrap();
+            other.batch_execute("ROLLBACK").await.unwrap();
+            busy.await.unwrap().unwrap();
+        },
+        schema.drop(),
+    )
+    .await;
+}
+
 /// `KEEP_TEST_QDRANT_CA`'s PEM, for a Qdrant behind TLS with a private CA.
 fn test_qdrant_ca() -> Option<Vec<u8>> {
     std::env::var_os("KEEP_TEST_QDRANT_CA").map(|p| std::fs::read(p).unwrap())

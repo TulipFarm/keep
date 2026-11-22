@@ -812,10 +812,7 @@ impl Knowledge {
 
     /// Check the ledger answers. For a readiness probe.
     pub async fn probe_ledger(&self) -> Result<()> {
-        self.ledger
-            .due_corpora(self.clock.now(), 1)
-            .await
-            .map(|_| ())
+        self.ledger.probe(self.clock.now()).await
     }
 
     /// Check the vector store answers and holds the collection with the
