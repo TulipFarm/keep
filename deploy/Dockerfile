@@ -8,7 +8,7 @@
 # image (KEEP_MODEL_CACHE), so the server never downloads it at runtime:
 #   docker build -f deploy/Dockerfile --build-arg KEEP_FEATURES=local-embeddings -t keep .
 
-FROM rust:1.99.1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7 AS build
+FROM rust:1.100.0-slim-trixie@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS build
 ARG KEEP_FEATURES=""
 ARG TARGETPLATFORM
 # The ONNX Runtime the local embedder links statically is C++ and needs

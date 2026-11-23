@@ -1467,7 +1467,6 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "fastembed",
- "keep-core",
  "reqwest",
  "serde",
  "serde_json",
