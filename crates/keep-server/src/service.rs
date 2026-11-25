@@ -34,9 +34,12 @@ use crate::model::ModelSetup;
 use crate::scope::{Scope, ScopeArg};
 use crate::settings::{Settings, check_embedder, database_receipt_key, file_receipt_key};
 
-/// Rounds of extraction jobs run after each ingest, so facts are searchable
-/// when `knowledge_ingest` returns.
+/// Rounds of extraction/projection jobs run after each ingest, bounded by
+/// `INGEST_JOB_BUDGET` so large batches return before client timeouts and
+/// let the background worker finish remaining jobs.
 const INGEST_JOB_ROUNDS: usize = 50;
+const INGEST_JOB_BATCH: usize = 16;
+const INGEST_JOB_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 const MAX_LIST_PAGE: usize = 100;
 const DEFAULT_COLLECTION: &str = "general";
 /// Bounds on what one `knowledge_summarize` call reads.
@@ -839,7 +842,15 @@ impl KeepService {
         };
         // The text is committed. Enrichment that fails from here on leaves it
         // captured; the response says so instead of reporting an error.
-        let jobs = self.knowledge.run_jobs(&corpus, INGEST_JOB_ROUNDS).await;
+        let jobs = self
+            .knowledge
+            .run_jobs_with_budget(
+                &corpus,
+                INGEST_JOB_ROUNDS,
+                INGEST_JOB_BATCH,
+                Some(INGEST_JOB_BUDGET),
+            )
+            .await;
         let enrichment = match &jobs {
             Ok(_) => self.enrichment(&scope).await,
             Err(_) => json!({ "state": "unknown" }),

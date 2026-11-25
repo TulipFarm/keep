@@ -39,8 +39,13 @@ fn local_record() -> anyhow::Result<EmbedderRecord> {
     })
 }
 
+/// Bounded in-memory embedding cache size for `keep serve` (~30 MiB for 384-d vectors).
+#[cfg(feature = "local-embeddings")]
+const LOCAL_EMBED_CACHE_MAX_ENTRIES: usize = 16_384;
+
 #[cfg(feature = "local-embeddings")]
 async fn load_local(model_cache: &Path) -> anyhow::Result<Arc<dyn Embedder>> {
+    use keep_providers::CachedEmbedder;
     use keep_providers::local_embed::{LocalEmbedConfig, LocalEmbedder};
     let config =
         LocalEmbedConfig::bge_small_en_v1_5(model_cache.to_owned()).with_env_overrides()?;
@@ -50,10 +55,20 @@ async fn load_local(model_cache: &Path) -> anyhow::Result<Arc<dyn Embedder>> {
             model_cache.display()
         );
     }
+    let cache_extra = format!(
+        "pool={:?};max_len={};device={:?};sha256={}",
+        config.pooling,
+        config.max_length,
+        config.device,
+        config.sha256.join(",")
+    );
     let e = LocalEmbedder::load(config)
         .await
         .map_err(|e| anyhow::anyhow!("loading the local embedding model: {e}"))?;
-    Ok(Arc::new(e))
+    let cached = CachedEmbedder::new(Arc::new(e), &cache_extra, None)
+        .map_err(|e| anyhow::anyhow!("initializing local embedding cache: {e}"))?
+        .with_max_entries(LOCAL_EMBED_CACHE_MAX_ENTRIES);
+    Ok(Arc::new(cached))
 }
 
 /// Download (or verify) the pinned local model under `model_cache`, and

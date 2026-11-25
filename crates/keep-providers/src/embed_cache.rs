@@ -11,7 +11,7 @@
 //! Only wrap free, local embedders: a hit reports no usage, which would hide
 //! the cost of a paid provider.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -28,11 +28,51 @@ type Key = [u8; 32];
 
 const RECORD_CHECK: usize = 8;
 
+struct CacheState {
+    vectors: HashMap<Key, Arc<[f32]>>,
+    order: VecDeque<Key>,
+    max_entries: Option<usize>,
+}
+
+impl CacheState {
+    fn insert(&mut self, key: Key, value: Arc<[f32]>) {
+        if self.vectors.contains_key(&key) {
+            return;
+        }
+        if let Some(limit) = self.max_entries {
+            if limit == 0 {
+                return;
+            }
+            while self.vectors.len() >= limit {
+                let Some(oldest) = self.order.pop_front() else {
+                    break;
+                };
+                self.vectors.remove(&oldest);
+            }
+            self.order.push_back(key);
+        }
+        self.vectors.insert(key, value);
+    }
+
+    fn set_max_entries(&mut self, max_entries: usize) {
+        self.max_entries = Some(max_entries);
+        if self.order.is_empty() && !self.vectors.is_empty() {
+            self.order.extend(self.vectors.keys().copied());
+        }
+        while self.vectors.len() > max_entries {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.vectors.remove(&oldest);
+        }
+    }
+}
+
 pub struct CachedEmbedder {
     inner: Arc<dyn Embedder>,
     namespace: Key,
     dims: usize,
-    vectors: Mutex<HashMap<Key, Arc<[f32]>>>,
+    state: Mutex<CacheState>,
     file: Option<Mutex<File>>,
 }
 
@@ -78,9 +118,23 @@ impl CachedEmbedder {
             inner,
             namespace,
             dims,
-            vectors: Mutex::new(vectors),
+            state: Mutex::new(CacheState {
+                vectors,
+                order: VecDeque::new(),
+                max_entries: None,
+            }),
             file,
         })
+    }
+
+    /// Bound the in-memory cache to `max_entries` vectors, evicting the oldest
+    /// entries first so long-running servers stay within a fixed memory budget.
+    pub fn with_max_entries(self, max_entries: usize) -> Self {
+        self.state
+            .lock()
+            .expect("embedding cache lock")
+            .set_max_entries(max_entries);
+        self
     }
 
     fn key(&self, text: &str) -> Key {
@@ -92,7 +146,11 @@ impl CachedEmbedder {
 
     /// Vectors held in memory, including those loaded from disk.
     pub fn len(&self) -> usize {
-        self.vectors.lock().expect("embedding cache lock").len()
+        self.state
+            .lock()
+            .expect("embedding cache lock")
+            .vectors
+            .len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -174,8 +232,8 @@ impl Embedder for CachedEmbedder {
     async fn embed(&self, texts: &[String]) -> Result<EmbedResponse, ProviderError> {
         let keys: Vec<Key> = texts.iter().map(|t| self.key(t)).collect();
         let mut out: Vec<Option<Arc<[f32]>>> = {
-            let cache = self.vectors.lock().expect("embedding cache lock");
-            keys.iter().map(|k| cache.get(k).cloned()).collect()
+            let cache = self.state.lock().expect("embedding cache lock");
+            keys.iter().map(|k| cache.vectors.get(k).cloned()).collect()
         };
         // Embed each distinct missing text once, in input order.
         let mut miss_keys = Vec::new();
@@ -206,8 +264,9 @@ impl Embedder for CachedEmbedder {
             }
             usage = resp.usage;
             let mut bytes = Vec::new();
+            let mut computed: HashMap<Key, Arc<[f32]>> = HashMap::with_capacity(miss_keys.len());
             {
-                let mut cache = self.vectors.lock().expect("embedding cache lock");
+                let mut cache = self.state.lock().expect("embedding cache lock");
                 for (k, v) in miss_keys.iter().zip(resp.vectors) {
                     if v.len() != self.dims {
                         return Err(ProviderError::Malformed {
@@ -221,12 +280,14 @@ impl Embedder for CachedEmbedder {
                     if self.file.is_some() {
                         bytes.extend_from_slice(&record(k, &v));
                     }
-                    cache.entry(*k).or_insert_with(|| v.into());
+                    let arc: Arc<[f32]> = v.into();
+                    computed.insert(*k, arc.clone());
+                    cache.insert(*k, arc);
                 }
-                for (i, k) in keys.iter().enumerate() {
-                    if out[i].is_none() {
-                        out[i] = cache.get(k).cloned();
-                    }
+            }
+            for (i, k) in keys.iter().enumerate() {
+                if out[i].is_none() {
+                    out[i] = computed.get(k).cloned();
                 }
             }
             if let Some(f) = &self.file {
@@ -348,5 +409,28 @@ mod tests {
         assert_eq!(b.len(), 1);
         assert_eq!(b.embed(&t).await.unwrap().vectors, v);
         assert_eq!(inner.texts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn max_entries_evicts_oldest_entries_without_dropping_in_flight_results() {
+        let inner = counting(8);
+        let c = CachedEmbedder::new(inner.clone(), "bounded", None)
+            .unwrap()
+            .with_max_entries(2);
+        let batch = texts(&["one", "two", "three"]);
+        let direct = inner.inner.embed(&batch).await.unwrap().vectors;
+        let got = c.embed(&batch).await.unwrap().vectors;
+        assert_eq!(got, direct);
+        assert_eq!(c.len(), 2);
+        assert_eq!(inner.texts.load(Ordering::SeqCst), 3);
+
+        // "two" and "three" remain cached; "one" was evicted and re-embeds.
+        let again = c.embed(&texts(&["two", "three"])).await.unwrap().vectors;
+        assert_eq!(again, direct[1..]);
+        assert_eq!(inner.texts.load(Ordering::SeqCst), 3);
+
+        c.embed(&texts(&["one"])).await.unwrap();
+        assert_eq!(inner.texts.load(Ordering::SeqCst), 4);
+        assert_eq!(c.len(), 2);
     }
 }
