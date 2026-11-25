@@ -3,8 +3,10 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/TulipFarm/keep/releases"><img alt="Release" src="https://img.shields.io/github/v/release/TulipFarm/keep?sort=semver&label=release&style=flat-square"></a>
   <a href="https://github.com/TulipFarm/keep/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/TulipFarm/keep/ci.yml?branch=main&label=CI&style=flat-square"></a>
   <a href="https://github.com/TulipFarm/keep/actions/workflows/image.yml"><img alt="Image" src="https://img.shields.io/github/actions/workflow/status/TulipFarm/keep/image.yml?branch=main&label=image&style=flat-square"></a>
+  <a href="https://github.com/TulipFarm/keep/pkgs/container/keep"><img alt="Container image: ghcr.io/tulipfarm/keep" src="https://img.shields.io/badge/ghcr.io-tulipfarm%2Fkeep-0a0a0a?style=flat-square&logo=docker&logoColor=white"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-0a0a0a?style=flat-square"></a>
   <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-dea584?style=flat-square&logo=rust&logoColor=white">
   <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-0a0a0a?style=flat-square">
@@ -52,7 +54,8 @@ curl -fsSL https://keep.tulipfarm.ai/install.sh | sh
 ```
 
 It asks the same questions. It runs on macOS and Linux, and the Postgres
-options need Docker. For a container, use `ghcr.io/tulipfarm/keep`. See
+options need Docker. For a container, use `ghcr.io/tulipfarm/keep:<version>`
+from the [latest release](https://github.com/TulipFarm/keep/releases/latest). See
 [Connecting coding agents](#connecting-coding-agents) for the manual steps.
 
 ## Status: research first
@@ -179,7 +182,8 @@ The daemon can hold Memory in memory or in Postgres, embeds Knowledge with
 a local ONNX model (no hosted model API unless you configure an
 OpenAI-compatible model for fact extraction and summaries), and supports
 scoped tokens, TLS, per-caller evidence budgets and per-source read
-allowlists. A container image is published at `ghcr.io/tulipfarm/keep`.
+allowlists. Each [release](#releases) publishes a container image at
+`ghcr.io/tulipfarm/keep`.
 [docs/server.md](docs/server.md) covers storage, scopes, the tool list,
 security and copy-paste client configuration.
 
@@ -215,6 +219,7 @@ The script then watches the run until it finishes.
 
 - Website: <https://keep.tulipfarm.ai>
 - Source: <https://github.com/TulipFarm/keep>
+- Releases: [GitHub releases](https://github.com/TulipFarm/keep/releases), [CHANGELOG.md](CHANGELOG.md), [container image](https://github.com/TulipFarm/keep/pkgs/container/keep)
 - Install: [install.md](https://keep.tulipfarm.ai/install.md) (for agents), [install.sh](https://keep.tulipfarm.ai/install.sh)
 - Docs: [Server](docs/server.md), [Memory](docs/memory.md), [Knowledge](docs/knowledge.md), [Benchmark methodology](docs/benchmarks/methodology.md)
 - Built by [TulipFarm](https://tulipfarm.ai)
