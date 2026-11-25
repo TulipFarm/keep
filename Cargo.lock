@@ -1429,7 +1429,7 @@ dependencies = [
 
 [[package]]
 name = "keep-bench"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1459,7 +1459,7 @@ dependencies = [
 
 [[package]]
 name = "keep-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
@@ -1471,7 +1471,7 @@ dependencies = [
 
 [[package]]
 name = "keep-knowledge"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1492,7 +1492,7 @@ dependencies = [
 
 [[package]]
 name = "keep-ledger"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1506,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "keep-memory"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "keep-postgres"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "keep-store",
@@ -1539,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "keep-providers"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "fastembed",
@@ -1555,7 +1555,7 @@ dependencies = [
 
 [[package]]
 name = "keep-qdrant"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "keep-server"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1604,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "keep-store"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "serde",
