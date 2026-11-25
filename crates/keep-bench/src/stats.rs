@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +83,7 @@ pub fn paired_cluster_bootstrap(
     for _ in 0..resamples {
         let (mut d, mut count) = (0.0, 0usize);
         for _ in 0..clusters.len() {
-            let (c, b, k) = clusters[rng.gen_range(0..clusters.len())];
+            let (c, b, k) = clusters[rng.random_range(0..clusters.len())];
             d += c - b;
             count += k;
         }

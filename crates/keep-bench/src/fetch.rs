@@ -1,6 +1,6 @@
 //! Download public datasets into the git-ignored data directory.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -20,7 +20,14 @@ pub struct Fetched {
 pub fn file_sha256(path: &Path) -> anyhow::Result<String> {
     let mut f = std::fs::File::open(path)?;
     let mut h = Sha256::new();
-    std::io::copy(&mut f, &mut h)?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
     Ok(hex::encode(h.finalize()))
 }
 

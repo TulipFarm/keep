@@ -157,9 +157,11 @@ pub async fn check_embedder(
 const RECEIPT_KEY_BYTES: usize = 32;
 
 fn new_receipt_key() -> String {
-    use rand::RngCore;
+    use rand::TryRng;
     let mut bytes = [0u8; RECEIPT_KEY_BYTES];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("the OS random source is available");
     hex::encode(bytes)
 }
 

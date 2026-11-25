@@ -11,7 +11,7 @@ name: keep-dev
 
 services:
   postgres:
-    image: pgvector/pgvector:0.8.2-pg18
+    image: pgvector/pgvector:0.8.7-pg18
     profiles: ["postgres-vector", "postgres-qdrant"]
     environment:
       POSTGRES_USER: keep
@@ -28,7 +28,7 @@ services:
       retries: 30
 
   qdrant:
-    image: qdrant/qdrant:v1.20.0
+    image: qdrant/qdrant:v1.20.2
     profiles: ["postgres-qdrant"]
     ports:
       - "127.0.0.1:16333:6333"
