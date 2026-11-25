@@ -2,25 +2,39 @@ name: Image
 
 # Builds deploy/Dockerfile with the on-device embedder (its pinned model
 # baked in) for linux/amd64 and linux/arm64 on native runners, and pushes
-# ghcr.io/<owner>/keep: `main` and `sha-<short>` from main, semver tags from
-# `v*` tags. Pull requests that touch the image build it without pushing.
+# ghcr.io/<owner>/keep: `main` and `sha-<short>` from main. The Release
+# workflow calls it with a version to publish `X.Y.Z`, `X.Y` and `latest`.
+# Pull requests that touch the image build it without pushing.
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     paths:
       - deploy/Dockerfile
       - deploy/entrypoint.sh
       - .github/workflows/image.yml
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to build
+        type: string
+        required: true
+      version:
+        description: Release tag, such as v1.2.3
+        type: string
+        required: true
+    outputs:
+      digest:
+        description: Digest of the published multi-platform index
+        value: ${{ jobs.publish.outputs.digest }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: image-${{ github.ref }}
+  group: image-${{ inputs.version || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -43,6 +57,8 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - name: Image name
         run: |
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/keep" >> "$GITHUB_ENV"
@@ -108,6 +124,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
     steps:
       - name: Image name
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/keep" >> "$GITHUB_ENV"
@@ -128,11 +146,12 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
-            type=sha,prefix=sha-,format=short,enable=${{ github.ref == 'refs/heads/main' }}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            type=raw,value=main,enable=${{ !inputs.version && github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-,format=short,enable=${{ !inputs.version && github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}},value=${{ inputs.version }},enable=${{ !!inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }},enable=${{ !!inputs.version }}
+            type=semver,pattern={{major}},value=${{ inputs.version }},enable=${{ !!inputs.version && !startsWith(inputs.version, 'v0.') }}
+            type=raw,value=latest,enable=${{ !!inputs.version }}
       - name: Create the multi-platform manifest
         working-directory: ${{ runner.temp }}/digests
         run: |
@@ -142,12 +161,14 @@ jobs:
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "${IMAGE}@sha256:%s " *)
       - name: Print the digest
+        id: digest
         run: |
           tag=$(jq -r '.tags[0] // empty' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           test -n "$tag" || exit 0
           docker buildx imagetools inspect "$tag"
           digest=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)
           echo "image digest: ${IMAGE}@${digest}"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
           {
             echo "### ${IMAGE}"
             echo

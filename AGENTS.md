@@ -43,6 +43,9 @@ To run the suites against TLS-only databases, or real remote ones, set
 25433 and 26333 and does this for you. `scripts/compose-smoke.sh` builds the
 image and checks both `deploy/compose.yaml` profiles end to end.
 
+Release with `scripts/release.sh [auto|patch|minor|major|X.Y.Z]`; see
+"Releases" in `README.md`. Don't tag or edit `CHANGELOG.md` by hand.
+
 ## Layout
 
 - `crates/keep-core` — domain types; no I/O.
