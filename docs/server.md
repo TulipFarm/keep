@@ -551,7 +551,8 @@ The `Image` workflow publishes `ghcr.io/tulipfarm/keep`, built with
 `linux/arm64`:
 
 - `main` and `sha-<short sha>` for each push to `main`;
-- `X.Y.Z`, `X.Y` and (from 1.0) `X` for each `vX.Y.Z` tag.
+- `X.Y.Z`, `X.Y`, (from 1.0) `X` and `latest` for each release (see
+  [Releases](../README.md#releases)).
 
 It runs as user `keep` (uid 10001) and starts `keep serve`. Each build is
 smoke-tested with no network: the server must become ready, by

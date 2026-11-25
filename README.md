@@ -186,6 +186,31 @@ security and copy-paste client configuration.
 See [docs/benchmarks/methodology.md](docs/benchmarks/methodology.md) for how
 runs are designed, what the numbers mean and what they cannot tell you.
 
+## Releases
+
+Maintainers release from their own machine; the build runs on GitHub
+Actions. You need the [GitHub CLI](https://cli.github.com) and, for a
+preview of the version and notes, [git-cliff](https://git-cliff.org).
+
+```sh
+scripts/release.sh          # version from the commit messages: feat → minor (before 1.0), fix → patch
+scripts/release.sh minor    # or patch, major, or an exact version such as 1.0.0
+```
+
+The script checks that CI passed on `main`, shows the changes and next
+version, and asks before it starts the
+[Release workflow](.github/workflows/release.yml). That workflow:
+
+1. Writes [CHANGELOG.md](CHANGELOG.md) and the Cargo version in a release
+   commit.
+2. Builds, smoke-tests and publishes `ghcr.io/tulipfarm/keep` from that
+   commit for `linux/amd64` and `linux/arm64`, tagged `X.Y.Z`, `X.Y` and
+   `latest`.
+3. Fast-forwards `main` to the release commit, tags `vX.Y.Z` and creates
+   the GitHub release.
+
+The script then watches the run until it finishes.
+
 ## Links
 
 - Website: <https://keep.tulipfarm.ai>
