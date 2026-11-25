@@ -8,7 +8,7 @@
 # image (KEEP_MODEL_CACHE), so the server never downloads it at runtime:
 #   docker build -f deploy/Dockerfile --build-arg KEEP_FEATURES=local-embeddings -t keep .
 
-FROM rust:1.100.0-slim-trixie@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS build
+FROM rust:1.100.0-slim-trixie@sha256:3b199fd6db7d709274df56565b8f4003f9e30d7bfcff9d53148c86053b7855e2 AS build
 ARG KEEP_FEATURES=""
 ARG TARGETPLATFORM
 # The ONNX Runtime the local embedder links statically is C++ and needs
@@ -29,7 +29,7 @@ RUN mkdir -p /opt/keep/models \
         *,local-embeddings,*) keep fetch-model --dir /opt/keep/models ;; \
     esac
 
-FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+FROM debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

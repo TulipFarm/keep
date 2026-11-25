@@ -369,9 +369,11 @@ pub fn hash_hex(token: &str) -> String {
 
 /// A new random token: 32 bytes from the OS, hex encoded.
 pub fn new_token() -> String {
-    use rand::RngCore;
+    use rand::TryRng;
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("the OS random source is available");
     format!("keep_{}", hex::encode(bytes))
 }
 
