@@ -33,7 +33,8 @@ done
 command -v gh >/dev/null || { echo "Install the GitHub CLI: https://cli.github.com" >&2; exit 1; }
 gh auth status --hostname github.com >/dev/null 2>&1 || { echo "Run gh auth login first." >&2; exit 1; }
 
-remote=$(git remote -v | awk -v r="$repo" 'tolower($2) ~ tolower(r) && $3 == "(fetch)" { print $1; exit }')
+remote=$(git remote -v | awk -v r="$repo" '{ u = tolower($2); sub(/\.git$/, "", u) }
+  $3 == "(fetch)" && (u ~ ("[/:]" tolower(r) "$")) { print $1; exit }')
 [ -n "$remote" ] || { echo "No git remote points at $repo." >&2; exit 1; }
 git fetch --quiet --tags "$remote" main
 sha=$(git rev-parse FETCH_HEAD)
