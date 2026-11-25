@@ -84,13 +84,18 @@ pub struct LocalEmbedConfig {
     pub sessions: Option<usize>,
 }
 
-/// Sessions and threads per session when none are configured: three
-/// threads per session and one session per three cores. On a 10-core Apple
-/// silicon laptop this measured fastest for `bge-small-en-v1.5`; a single
-/// session with every core leaves most of them idle on short inputs.
+/// Sessions and threads per session when none are configured: up to three
+/// threads per session (clamped to the host's available cores so small
+/// machines are not oversubscribed) and one session per group of threads.
 pub fn default_parallelism() -> (usize, usize) {
     let cores = std::thread::available_parallelism().map_or(3, |n| n.get());
-    ((cores / 3).max(1), 3)
+    parallelism_for_cores(cores)
+}
+
+fn parallelism_for_cores(cores: usize) -> (usize, usize) {
+    let cores = cores.max(1);
+    let threads = cores.min(3);
+    ((cores / threads).max(1), threads)
 }
 
 /// Hugging Face repository of the default local model.
@@ -438,6 +443,15 @@ mod tests {
         let c = LocalEmbedConfig::bge_small_en_v1_5(PathBuf::from("cache"));
         assert_eq!(c.sha256.len(), MODEL_FILES.len());
         assert!(c.sha256.iter().all(|h| h.len() == "sha256:".len() + 64));
+    }
+
+    #[test]
+    fn default_parallelism_never_oversubscribes_small_hosts() {
+        assert_eq!(parallelism_for_cores(1), (1, 1));
+        assert_eq!(parallelism_for_cores(2), (1, 2));
+        assert_eq!(parallelism_for_cores(3), (1, 3));
+        assert_eq!(parallelism_for_cores(6), (2, 3));
+        assert_eq!(parallelism_for_cores(10), (3, 3));
     }
 
     /// Downloads about 130 MB. Run with

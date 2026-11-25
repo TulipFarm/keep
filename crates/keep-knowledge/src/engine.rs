@@ -742,10 +742,32 @@ impl Knowledge {
 
     /// Run due jobs until none are left (or `max_rounds` batches ran).
     pub async fn run_jobs(&self, corpus: &str, max_rounds: usize) -> Result<JobRun> {
+        self.run_jobs_with_budget(corpus, max_rounds, 64, None)
+            .await
+    }
+
+    /// Run due jobs in batches of up to `batch_size`, stopping between rounds
+    /// once `budget` has elapsed so synchronous callers never block past their
+    /// request timeout while a background worker drains the rest.
+    pub async fn run_jobs_with_budget(
+        &self,
+        corpus: &str,
+        max_rounds: usize,
+        batch_size: usize,
+        budget: Option<std::time::Duration>,
+    ) -> Result<JobRun> {
         let mut run = JobRun::default();
-        for _ in 0..max_rounds {
+        let batch_size = batch_size.max(1);
+        let started = std::time::Instant::now();
+        for round in 0..max_rounds {
+            if round > 0 && budget.is_some_and(|b| started.elapsed() >= b) {
+                break;
+            }
             let t = timing::span("knowledge.jobs_claim");
-            let jobs = self.ledger.claim_jobs(corpus, self.clock.now(), 64).await?;
+            let jobs = self
+                .ledger
+                .claim_jobs(corpus, self.clock.now(), batch_size)
+                .await?;
             drop(t.items(jobs.len()));
             if jobs.is_empty() {
                 break;

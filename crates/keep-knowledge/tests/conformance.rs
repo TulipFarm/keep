@@ -1691,6 +1691,35 @@ async fn in_memory_profile() {
     replace_during_extraction(Env::new(profile::in_memory())).await;
 }
 
+#[tokio::test]
+async fn run_jobs_with_budget_stops_after_budget_expires() {
+    let env = Env::new(profile::in_memory());
+    let k = &env.k;
+    let c = "job_budget";
+    env.clock.set(day(2024, 5, 1));
+    let eps: Vec<EpisodeInput> = (0..5)
+        .map(|i| {
+            turn(
+                &format!("e{i}"),
+                day(2024, 5, 1),
+                &format!("Note {i} text."),
+            )
+        })
+        .collect();
+    k.ingest(c, source("s", "team", "docs", "Notes"), eps)
+        .await
+        .unwrap();
+
+    let first = k
+        .run_jobs_with_budget(c, 10, 2, Some(std::time::Duration::ZERO))
+        .await
+        .unwrap();
+    assert_eq!(first.succeeded, 2);
+
+    let rest = k.run_jobs(c, 10).await.unwrap();
+    assert!(rest.succeeded >= 3);
+}
+
 fn visible_first(k: Knowledge) -> Knowledge {
     let config = KnowledgeConfig {
         lexical: LexicalMode::Bm25(Bm25Params::default()),
