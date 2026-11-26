@@ -3,6 +3,16 @@
 All notable changes to Keep. Versions follow [Semantic Versioning](https://semver.org), and each release is
 published as `ghcr.io/tulipfarm/keep:<version>`.
 
+## [0.1.1](https://github.com/TulipFarm/keep/releases/tag/v0.1.1) - 2026-11-26
+
+### Performance
+
+- Bound ingest work, reuse stored vectors and cap ONNX CPU ([#14](https://github.com/TulipFarm/keep/pull/14))
+
+### Documentation
+
+- **readme:** Add release and container badges, point to releases ([#13](https://github.com/TulipFarm/keep/pull/13))
+
 ## [0.1.0](https://github.com/TulipFarm/keep/releases/tag/v0.1.0) - 2026-11-25
 
 ### Features
