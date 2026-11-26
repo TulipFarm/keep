@@ -17,7 +17,7 @@ use fastembed::{
 
 use crate::ProviderDescriptor;
 use crate::chat::ProviderError;
-use crate::local_embed::{LocalDevice, config_err, default_parallelism, ensure_pinned};
+use crate::local_embed::{LocalDevice, NO_SPIN, config_err, default_parallelism, ensure_pinned};
 use crate::rerank::Reranker;
 
 #[derive(Clone, Debug)]
@@ -34,6 +34,8 @@ pub struct LocalRerankConfig {
     pub device: LocalDevice,
     pub intra_threads: Option<usize>,
     pub sessions: Option<usize>,
+    /// See [`crate::local_embed::LocalEmbedConfig::allow_spinning`].
+    pub allow_spinning: bool,
 }
 
 /// The default local cross-encoder: 22M parameters, trained on MS MARCO
@@ -64,6 +66,7 @@ impl LocalRerankConfig {
             device: LocalDevice::Cpu,
             intra_threads: None,
             sessions: None,
+            allow_spinning: false,
         }
     }
 
@@ -75,12 +78,14 @@ impl LocalRerankConfig {
             device: self.device,
             intra_threads: self.intra_threads,
             sessions: self.sessions,
+            allow_spinning: self.allow_spinning,
             ..crate::local_embed::LocalEmbedConfig::bge_small_en_v1_5(self.cache_dir.clone())
         }
         .with_env_overrides()?;
         self.device = e.device;
         self.intra_threads = e.intra_threads;
         self.sessions = e.sessions;
+        self.allow_spinning = e.allow_spinning;
         Ok(self)
     }
 
@@ -137,6 +142,11 @@ impl LocalReranker {
         let mut options = RerankInitOptionsUserDefined::new()
             .with_max_length(config.max_length)
             .with_intra_threads(threads);
+        if !config.allow_spinning {
+            for (k, v) in NO_SPIN {
+                options = options.with_session_config(k, v);
+            }
+        }
         if config.device == LocalDevice::Cpu {
             options = options.with_auto_device(AutoDevicePolicy::PreferCPU);
         }

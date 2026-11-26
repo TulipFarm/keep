@@ -82,21 +82,32 @@ pub struct LocalEmbedConfig {
     /// Model sessions that embed texts in parallel; `None` picks
     /// [`default_parallelism`].
     pub sessions: Option<usize>,
+    /// Let ONNX Runtime's worker threads busy-wait for more work after each
+    /// run. Slightly faster for back-to-back runs, but it burns CPU while
+    /// idle, so it is off unless asked for.
+    pub allow_spinning: bool,
 }
 
-/// Sessions and threads per session when none are configured: up to three
-/// threads per session (clamped to the host's available cores so small
-/// machines are not oversubscribed) and one session per group of threads.
+/// Sessions and threads per session when none are configured: at most
+/// half the host's available cores (at least one), up to three threads per
+/// session and one session per group of threads, so embedding never takes
+/// the whole machine from the database and other services beside it.
 pub fn default_parallelism() -> (usize, usize) {
-    let cores = std::thread::available_parallelism().map_or(3, |n| n.get());
+    let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
     parallelism_for_cores(cores)
 }
 
 fn parallelism_for_cores(cores: usize) -> (usize, usize) {
-    let cores = cores.max(1);
-    let threads = cores.min(3);
-    ((cores / threads).max(1), threads)
+    let budget = (cores / 2).max(1);
+    let threads = budget.min(3);
+    ((budget / threads).max(1), threads)
 }
+
+/// ONNX Runtime session settings that stop worker threads spinning.
+pub(crate) const NO_SPIN: [(&str, &str); 2] = [
+    ("session.intra_op.allow_spinning", "0"),
+    ("session.inter_op.allow_spinning", "0"),
+];
 
 /// Hugging Face repository of the default local model.
 pub const BGE_SMALL_EN_V1_5_REPO: &str = "BAAI/bge-small-en-v1.5";
@@ -130,12 +141,14 @@ impl LocalEmbedConfig {
             device: LocalDevice::Cpu,
             intra_threads: None,
             sessions: None,
+            allow_spinning: false,
         }
     }
 
-    /// Apply `KEEP_ONNX_DEVICE` (`cpu` or `auto`), `KEEP_ONNX_THREADS` and
-    /// `KEEP_ONNX_SESSIONS` when they are set and non-empty. None of them
-    /// changes which model runs.
+    /// Apply `KEEP_ONNX_DEVICE` (`cpu` or `auto`), `KEEP_ONNX_THREADS`,
+    /// `KEEP_ONNX_SESSIONS` and `KEEP_ONNX_SPIN` (`1`/`true` or
+    /// `0`/`false`) when they are set and non-empty. None of them changes
+    /// which model runs.
     pub fn with_env_overrides(mut self) -> Result<Self, ProviderError> {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
         if let Some(d) = var("KEEP_ONNX_DEVICE") {
@@ -155,6 +168,17 @@ impl LocalEmbedConfig {
         }
         if let Some(n) = count("KEEP_ONNX_SESSIONS")? {
             self.sessions = Some(n);
+        }
+        if let Some(v) = var("KEEP_ONNX_SPIN") {
+            self.allow_spinning = match v.as_str() {
+                "1" | "true" => true,
+                "0" | "false" => false,
+                _ => {
+                    return Err(config_err(format!(
+                        "KEEP_ONNX_SPIN must be 1, true, 0 or false, got {v:?}"
+                    )));
+                }
+            };
         }
         Ok(self)
     }
@@ -305,6 +329,11 @@ impl LocalEmbedder {
         let mut options = InitOptionsUserDefined::new()
             .with_max_length(config.max_length)
             .with_intra_threads(threads);
+        if !config.allow_spinning {
+            for (k, v) in NO_SPIN {
+                options = options.with_session_config(k, v);
+            }
+        }
         if config.device == LocalDevice::Cpu {
             options = options.with_auto_device(AutoDevicePolicy::PreferCPU);
         }
@@ -448,10 +477,11 @@ mod tests {
     #[test]
     fn default_parallelism_never_oversubscribes_small_hosts() {
         assert_eq!(parallelism_for_cores(1), (1, 1));
-        assert_eq!(parallelism_for_cores(2), (1, 2));
-        assert_eq!(parallelism_for_cores(3), (1, 3));
-        assert_eq!(parallelism_for_cores(6), (2, 3));
-        assert_eq!(parallelism_for_cores(10), (3, 3));
+        assert_eq!(parallelism_for_cores(2), (1, 1));
+        assert_eq!(parallelism_for_cores(4), (1, 2));
+        assert_eq!(parallelism_for_cores(6), (1, 3));
+        assert_eq!(parallelism_for_cores(12), (2, 3));
+        assert_eq!(parallelism_for_cores(20), (3, 3));
     }
 
     /// Downloads about 130 MB. Run with
