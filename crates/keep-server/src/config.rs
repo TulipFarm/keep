@@ -173,6 +173,28 @@ pub struct ServiceArgs {
         global = true
     )]
     pub evidence_budget_per: BudgetPer,
+    /// Milliseconds an ingest spends on its own source's extraction and
+    /// projection jobs before answering; the background worker finishes the
+    /// rest. 0 leaves all of them to the worker.
+    #[arg(
+        long,
+        env = "KEEP_INGEST_JOB_BUDGET_MS",
+        default_value_t = 5000,
+        global = true
+    )]
+    pub ingest_job_budget_ms: u64,
+    /// Milliseconds the background worker sleeps between job batches, so
+    /// backlog work yields CPU to requests. 0 runs batches back to back.
+    #[arg(long, env = "KEEP_JOB_PAUSE_MS", default_value_t = 200, global = true)]
+    pub job_pause_ms: u64,
+    /// Model sessions embedding at once with `--embedder local`. Sessions
+    /// times threads is the most cores embedding uses. Defaults to fit half
+    /// the available cores.
+    #[arg(long, env = "KEEP_ONNX_SESSIONS", global = true, value_parser = clap::value_parser!(u32).range(1..))]
+    pub onnx_sessions: Option<u32>,
+    /// ONNX Runtime threads per session with `--embedder local`.
+    #[arg(long, env = "KEEP_ONNX_THREADS", global = true, value_parser = clap::value_parser!(u32).range(1..))]
+    pub onnx_threads: Option<u32>,
     #[command(flatten)]
     pub model: crate::model::ModelArgs,
 }
