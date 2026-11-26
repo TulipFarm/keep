@@ -24,7 +24,7 @@ pub fn record(kind: EmbedderKind) -> anyhow::Result<EmbedderRecord> {
 pub async fn load(args: &ServiceArgs) -> anyhow::Result<Arc<dyn Embedder>> {
     match args.embedder_kind() {
         EmbedderKind::Hash => Ok(Arc::new(HashEmbedder::new(HASH_DIMENSIONS))),
-        EmbedderKind::Local => load_local(&args.model_cache()?).await,
+        EmbedderKind::Local => load_local(args, &args.model_cache()?).await,
     }
 }
 
@@ -44,11 +44,26 @@ fn local_record() -> anyhow::Result<EmbedderRecord> {
 const LOCAL_EMBED_CACHE_MAX_ENTRIES: usize = 16_384;
 
 #[cfg(feature = "local-embeddings")]
-async fn load_local(model_cache: &Path) -> anyhow::Result<Arc<dyn Embedder>> {
+async fn load_local(args: &ServiceArgs, model_cache: &Path) -> anyhow::Result<Arc<dyn Embedder>> {
     use keep_providers::CachedEmbedder;
     use keep_providers::local_embed::{LocalEmbedConfig, LocalEmbedder};
-    let config =
+    let mut config =
         LocalEmbedConfig::bge_small_en_v1_5(model_cache.to_owned()).with_env_overrides()?;
+    if let Some(n) = args.onnx_sessions {
+        config.sessions = Some(n as usize);
+    }
+    if let Some(n) = args.onnx_threads {
+        config.intra_threads = Some(n as usize);
+    }
+    let (sessions, threads) = config.parallelism();
+    eprintln!(
+        "keep: local embeddings use {sessions} session(s) x {threads} thread(s){}",
+        if config.allow_spinning {
+            ", spinning"
+        } else {
+            ""
+        }
+    );
     if !config.model_dir().exists() {
         eprintln!(
             "keep: downloading the local embedding model (about 130 MB) into {}",
@@ -95,7 +110,7 @@ fn local_record() -> anyhow::Result<EmbedderRecord> {
 }
 
 #[cfg(not(feature = "local-embeddings"))]
-async fn load_local(_: &Path) -> anyhow::Result<Arc<dyn Embedder>> {
+async fn load_local(_: &ServiceArgs, _: &Path) -> anyhow::Result<Arc<dyn Embedder>> {
     Err(not_compiled())
 }
 

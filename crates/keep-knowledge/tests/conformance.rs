@@ -16,7 +16,7 @@ use keep_knowledge::{
     Access, AsOf, EvidenceAllowance, Fetched, IndexRequest, ItemRef, Knowledge, KnowledgeConfig,
     KnowledgeError, LexicalMode, ManualClock, SearchRequest, SourceKind, profile,
 };
-use keep_providers::{ProviderError, Reranker};
+use keep_providers::{EmbedResponse, Embedder, HashEmbedder, ProviderError, Reranker};
 use keep_store::Bm25Params;
 
 struct Env {
@@ -142,6 +142,248 @@ async fn suite(label: &str, env: &Env) {
     allowlist_hides_supersession(env).await;
     eprintln!("[{label}] allowlist hides aliases");
     allowlist_hides_aliases(env).await;
+    eprintln!("[{label}] retried document reuses vectors");
+    retried_document_reuses_vectors(env).await;
+    eprintln!("[{label}] source jobs stay in their source");
+    source_jobs_stay_in_their_source(env).await;
+    eprintln!("[{label}] source jobs stop at the deadline");
+    source_jobs_stop_at_the_deadline(env).await;
+}
+
+/// The default embedder, counting the texts it embeds and taking `delay`
+/// per call, as a busy local model would.
+struct Counting {
+    inner: HashEmbedder,
+    texts: std::sync::atomic::AtomicUsize,
+    delay: std::time::Duration,
+}
+
+impl Counting {
+    fn new(delay: std::time::Duration) -> Arc<Self> {
+        Arc::new(Self {
+            inner: HashEmbedder::new(256),
+            texts: Default::default(),
+            delay,
+        })
+    }
+    fn texts(&self) -> usize {
+        self.texts.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl Embedder for Counting {
+    fn descriptor(&self) -> &keep_providers::ProviderDescriptor {
+        self.inner.descriptor()
+    }
+    fn dimensions(&self) -> usize {
+        self.inner.dimensions()
+    }
+    async fn embed(&self, texts: &[String]) -> Result<EmbedResponse, ProviderError> {
+        self.texts
+            .fetch_add(texts.len(), std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(self.delay).await;
+        self.inner.embed(texts).await
+    }
+}
+
+/// A document sent in batches: the first replaces, the rest append.
+fn doc_batches() -> (SourceInput, Vec<EpisodeInput>, Vec<EpisodeInput>) {
+    let at = day(2024, 9, 1);
+    let para = |i: usize| {
+        turn(
+            &format!("p{i}"),
+            at,
+            &format!("Paragraph {i} describes the quarterly glacier survey route {i}."),
+        )
+    };
+    (
+        source("manual", "team", "docs", "Survey manual"),
+        (0..3).map(para).collect(),
+        (3..6).map(para).collect(),
+    )
+}
+
+/// A client times out after its first two batches and retries the whole
+/// document: the replaced first batch and the resent append reuse stored
+/// vectors, and an append already stored is a no-op.
+async fn retried_document_reuses_vectors(env: &Env) {
+    let embedder = Counting::new(std::time::Duration::ZERO);
+    let k = env
+        .k
+        .sharing_storage(env.clock.clone())
+        .with_embedder(embedder.clone());
+    let c = "retry_doc";
+    env.clock.set(day(2024, 9, 1));
+    let (src, first, second) = doc_batches();
+    k.ingest_revision(c, src.clone(), first.clone())
+        .await
+        .unwrap();
+    k.ingest(c, src.clone(), second.clone()).await.unwrap();
+    k.run_jobs(c, 10).await.unwrap();
+    let embedded = embedder.texts();
+    assert!(embedded >= 6, "every chunk embedded once: {embedded}");
+
+    // Resending a stored batch changes nothing.
+    let again = k.ingest(c, src.clone(), second.clone()).await.unwrap();
+    assert_eq!(
+        (
+            again.episodes_added,
+            again.episodes_unchanged,
+            again.jobs_enqueued
+        ),
+        (0, 3, 0),
+        "{again:?}"
+    );
+
+    // The retry: the first batch replaces, dropping the second until it is
+    // appended again.
+    let replaced = k
+        .ingest_revision(c, src.clone(), first.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            replaced.episodes_added,
+            replaced.episodes_unchanged,
+            replaced.episodes_removed
+        ),
+        (0, 3, 3),
+        "{replaced:?}"
+    );
+    let appended = k.ingest(c, src.clone(), second.clone()).await.unwrap();
+    assert_eq!(appended.episodes_added, 3, "{appended:?}");
+    let run = k.run_jobs(c, 10).await.unwrap();
+    assert_eq!(run.failed, 0, "{run:?}");
+    assert_eq!(embedder.texts(), embedded, "no chunk embedded twice");
+
+    let eps = k.ledger().source_episodes(c, "manual").await.unwrap();
+    let mut ids: Vec<&str> = eps.iter().map(|e| e.id.as_str()).collect();
+    ids.sort();
+    assert_eq!(ids, ["p0", "p1", "p2", "p3", "p4", "p5"]);
+    let res = k
+        .search(
+            &search_req(c, everyone(), "glacier survey route 4", AsOf::now()),
+            &mut EvidenceAllowance::default(),
+        )
+        .await
+        .unwrap();
+    assert!(!res.hits.is_empty());
+    let embedded = embedder.texts();
+
+    // Changed text is embedded; a vector left unused past the grace period
+    // is swept and has to be embedded again.
+    let mut edited = first.clone();
+    edited[0].text = "Paragraph 0 describes the coastal survey route 0.".into();
+    k.ingest_revision(c, src.clone(), edited).await.unwrap();
+    k.run_jobs(c, 10).await.unwrap();
+    assert_eq!(embedder.texts(), embedded + 1, "only the edited chunk");
+    env.clock.advance(chrono::Duration::hours(2));
+    k.run_due_jobs(100, 10).await.unwrap();
+    let reverted = k.ingest_revision(c, src, first).await.unwrap();
+    assert!(reverted.replaced);
+    k.run_jobs(c, 10).await.unwrap();
+    assert_eq!(
+        embedder.texts(),
+        embedded + 2,
+        "swept vector embedded again"
+    );
+    k.delete_corpus(c).await.unwrap();
+}
+
+/// Running one source's jobs leaves another source's backlog alone.
+async fn source_jobs_stay_in_their_source(env: &Env) {
+    let k = &env.k;
+    let c = "source_jobs";
+    env.clock.set(day(2024, 9, 1));
+    let (_, first, second) = doc_batches();
+    k.ingest(c, source("backlog", "hr", "docs", "Backlog"), first)
+        .await
+        .unwrap();
+    let backlog = k.unfinished_job_counts(c, "hr").await.unwrap();
+    assert!(backlog.pending > 0, "{backlog:?}");
+    k.ingest(c, source("fresh", "team", "docs", "Fresh"), second)
+        .await
+        .unwrap();
+    let far = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let run = k.run_source_jobs(c, "fresh", far).await.unwrap();
+    assert!(run.succeeded > 0, "{run:?}");
+    assert_eq!((run.failed, run.deferred), (0, 0), "{run:?}");
+    assert_eq!(
+        k.unfinished_job_counts(c, "team")
+            .await
+            .unwrap()
+            .outstanding(),
+        0
+    );
+    assert_eq!(k.unfinished_job_counts(c, "hr").await.unwrap(), backlog);
+    k.run_jobs(c, 10).await.unwrap();
+    assert_eq!(
+        k.unfinished_job_counts(c, "hr")
+            .await
+            .unwrap()
+            .outstanding(),
+        0
+    );
+    k.delete_corpus(c).await.unwrap();
+}
+
+/// A slow embedder stops a source's job run at its deadline: unstarted jobs
+/// go back to pending for the background worker, which finishes them.
+async fn source_jobs_stop_at_the_deadline(env: &Env) {
+    let slow = std::time::Duration::from_millis(150);
+    let k = env
+        .k
+        .sharing_storage(env.clock.clone())
+        .with_embedder(Counting::new(slow));
+    let c = "source_deadline";
+    env.clock.set(day(2024, 9, 1));
+    // Several chunks per note, so a claimed batch holds more than one
+    // projection group.
+    let eps: Vec<EpisodeInput> = (0..3)
+        .map(|i| {
+            let text = (0..200)
+                .map(|j| format!("Field note {i} line {j} logs ice depth and wind."))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            turn(&format!("n{i}"), day(2024, 9, 1), &text)
+        })
+        .collect();
+    k.ingest(c, source("notes", "team", "docs", "Notes"), eps)
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_millis(100);
+    let run = k.run_source_jobs(c, "notes", deadline).await.unwrap();
+    // At most one projection group runs past the deadline.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(run.deferred > 0, "{run:?}");
+    let left = k.unfinished_job_counts(c, "team").await.unwrap();
+    assert!(left.pending >= run.deferred as i64, "{left:?}");
+    assert_eq!(
+        left.outstanding(),
+        left.pending,
+        "nothing left claimed: {left:?}"
+    );
+    // Handed-back jobs are due again at once, without a retry or attempt.
+    let rest = k.run_jobs(c, 20).await.unwrap();
+    assert_eq!(
+        (rest.succeeded as i64, rest.retried, rest.failed),
+        (left.pending, 0, 0)
+    );
+    assert!(
+        k.ledger()
+            .jobs(c)
+            .await
+            .unwrap()
+            .iter()
+            .all(|j| j.attempts <= 1)
+    );
+    k.delete_corpus(c).await.unwrap();
 }
 
 async fn idempotent_ingest(env: &Env) {

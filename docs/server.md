@@ -118,6 +118,11 @@ the subcommand.
 | `--tokenizer` | `KEEP_TOKENIZER` | `tiktoken-o200k-base` | Budget tokenizer: `tiktoken-o200k-base`, `tiktoken-cl100k-base` or `approx-v1` |
 | `--no-profile-writes` | `KEEP_NO_PROFILE_WRITES` | off | Refuse placing files in the You category (`/profile.md`, `/you/<slug>.md`) |
 | `--embedder` | `KEEP_EMBEDDER` | `local` if built with `local-embeddings`, else `hash` | Knowledge embedder; see [Embeddings](#embeddings) |
+| `--onnx-sessions` | `KEEP_ONNX_SESSIONS` | fits half the cores | Local model sessions embedding at once; see [CPU use](#cpu-use) |
+| `--onnx-threads` | `KEEP_ONNX_THREADS` | fits half the cores, at most 3 | ONNX Runtime threads per session |
+| | `KEEP_ONNX_SPIN` | `0` | `1` lets idle ONNX threads spin, which is faster on a dedicated host and burns CPU on a shared one |
+| `--ingest-job-budget-ms` | `KEEP_INGEST_JOB_BUDGET_MS` | 5000 | Time an ingest spends on its own source's jobs before it answers; `0` leaves them all to the worker |
+| `--job-pause-ms` | `KEEP_JOB_PAUSE_MS` | 200 | Pause between the background worker's job batches |
 | `--data-dir` | `KEEP_DATA_DIR` | platform data dir | Receipt key and model cache; see [Receipts](#receipts-and-the-data-directory) |
 | | `KEEP_MODEL_CACHE` | `<data-dir>/models` | Where the local model is downloaded; `/opt/keep/models` (baked in) in the image |
 | `--evidence-budget-tokens` | `KEEP_EVIDENCE_BUDGET_TOKENS` | off | Evidence each caller may draw per window; see [Evidence budget](#evidence-budget) |
@@ -177,6 +182,36 @@ rather than mix vectors. To switch, either keep the old `--embedder`, or
 start with the new embedder and a new, empty `--collection`, then call
 `knowledge_rebuild_projection` once for each user to re-embed from the
 records in Postgres. `GET /v1/health` reports the embedder in use.
+
+### CPU use
+
+Embedding is the expensive part of Keep. These limits keep it from taking
+over a small or shared host:
+
+- **Embedding threads.** The local model uses at most `KEEP_ONNX_SESSIONS`
+  × `KEEP_ONNX_THREADS` cores. By default the two fit half the available
+  cores: one session with one thread on a 2-core host, one with two threads
+  on 4 cores, two with three threads on 12. Idle threads sleep instead of
+  spinning unless `KEEP_ONNX_SPIN=1`. Start-up logs the values in use.
+- **No repeated embedding.** Chunk vectors are stored in the ledger, keyed
+  by a hash of the embedder and the text. Re-ingesting, replacing or
+  resuming a source reuses them, across requests and restarts, and identical
+  texts in one batch are embedded once. With the local model, a query or
+  fact already embedded in this process comes from a cache of 16,384 vectors.
+- **Bounded ingests.** `knowledge_ingest` commits the text, then runs only
+  its own source's extraction and projection jobs until
+  `KEEP_INGEST_JOB_BUDGET_MS` has passed. The deadline is checked before
+  each job and each group of 8 projections, and jobs not started by then
+  stay queued. The response reports them (see
+  [Sources for a host application](#sources-for-a-host-application)).
+- **A throttled worker.** Every 5 seconds a background worker runs queued
+  jobs for every scope, in batches of 16, sleeping `KEEP_JOB_PAUSE_MS`
+  between groups so requests get the CPU first.
+
+For a container that should use at most about one core, set
+`KEEP_ONNX_SESSIONS=1`, `KEEP_ONNX_THREADS=1`, `KEEP_ONNX_SPIN=0`,
+`KEEP_JOB_PAUSE_MS=300` and `KEEP_INGEST_JOB_BUDGET_MS=5000` (or lower if
+clients time out sooner than 30 seconds), and give it a CPU limit as well.
 
 ### Model-backed extraction and summaries
 
@@ -341,6 +376,30 @@ both. The response's `replaced` is `true` when the text, title, collection or me
 `false` when it was identical (then nothing is rewritten). Facts also
 supported by other sources keep that other evidence. Replace does not issue
 a forget receipt; use `knowledge_forget_source` to erase a source.
+
+Replace is incremental. Episodes whose id and text are unchanged keep their
+chunks, vectors and facts; only changed and missing episodes are purged and
+the new ones processed. Vectors of purged chunks stay stored for an hour, so
+text that comes back within that time, such as a document's later batches
+sent again after a retry, is not embedded again.
+
+**Batches.** A long document can be sent in several calls with the same
+`source_id`, `title`, `collection`, `kind` and `metadata`: the first with
+`"replace": true`, the rest without, which appends their episodes. Give each
+episode an explicit `id` that is unique across the whole document, as the
+default ids (`ep00001`, …) restart in every call. Sending a stored batch
+again is a no-op (`report.episodes_added` is 0). To resume after a timeout,
+send only the batches not yet stored, without `replace`. Retrying the first
+batch with `replace` drops every episode not in it until the later batches
+are sent again.
+
+**Enrichment.** The response's `jobs` counts this call's job run:
+`succeeded`, `retried`, `failed` and `deferred`, the jobs handed back
+unstarted at the deadline. `enrichment.state` is `complete`, `pending`
+(jobs still queued for the background worker), `failed` or `unknown`. When
+the job run itself fails, `jobs` is `null` and `enrichment.error` holds the
+error code; the text is still stored. `report.episodes_removed` counts the
+episodes a replace purged.
 
 **Allowlists.** `knowledge_search`, `knowledge_fetch`, `knowledge_cite`,
 `knowledge_traverse` and `knowledge_index` take optional `source_ids` and

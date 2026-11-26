@@ -43,9 +43,12 @@ pub struct IngestBatch {
     pub episodes: Vec<Episode>,
     pub chunks: Vec<Chunk>,
     pub now: Time,
-    /// Replace an existing source whose metadata or episodes differ: purge
-    /// its old content and insert this batch in one atomic step. Without
-    /// it such a batch is a [`KnowledgeError::Conflict`].
+    /// Replace an existing source whose metadata or episodes differ, in one
+    /// atomic step. Episodes whose id and content are unchanged are kept
+    /// with everything derived from them; removed or changed episodes are
+    /// purged and the new ones inserted. A changed partition or kind purges
+    /// the whole old revision. Without it such a batch is a
+    /// [`KnowledgeError::Conflict`].
     pub replace: bool,
 }
 
@@ -56,9 +59,13 @@ pub struct IngestReport {
     pub episodes_unchanged: usize,
     pub chunks_added: usize,
     pub jobs_enqueued: usize,
-    /// An earlier revision of the source was purged and replaced.
+    /// An earlier revision of the source was replaced: its metadata changed
+    /// or some of its episodes were purged.
     #[serde(default)]
     pub replaced: bool,
+    /// Episodes of the earlier revision purged by the replacement.
+    #[serde(default)]
+    pub episodes_removed: usize,
     /// What the replacement purged, for the engine to clean the projection.
     #[serde(skip)]
     pub purged: Option<PurgeReport>,
@@ -172,6 +179,20 @@ pub struct PurgeReport {
     pub kept_fact_ids: Vec<String>,
 }
 
+/// A chunk's vector kept by the ledger so unchanged text is never embedded
+/// twice. `digest` covers the embedding model and the exact text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredVector {
+    pub point_id: String,
+    pub digest: String,
+    pub vector: Vec<f32>,
+}
+
+/// How long a chunk's stored vector outlives a revision that removed the
+/// chunk, so a client resending the rest of a document after a retried
+/// replace reuses it. Forgetting a source or corpus deletes it at once.
+pub const VECTOR_GRACE_SECONDS: i64 = 3600;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Projection {
     pub partition: String,
@@ -274,6 +295,19 @@ pub trait Ledger: Send + Sync {
     async fn enqueue(&self, corpus: &str, jobs: &[NewJob], now: Time) -> Result<()>;
     /// Lease due jobs (pending or retry-scheduled with `next_attempt_at <= now`).
     async fn claim_jobs(&self, corpus: &str, now: Time, limit: usize) -> Result<Vec<Job>>;
+    /// [`Ledger::claim_jobs`] limited to jobs derived from one source:
+    /// extraction of its episodes and projection of its chunks and of the
+    /// facts it supports. Vector removals are left to other claims.
+    async fn claim_source_jobs(
+        &self,
+        corpus: &str,
+        source_id: &str,
+        now: Time,
+        limit: usize,
+    ) -> Result<Vec<Job>>;
+    /// Hand leased jobs back unstarted: pending again, due at `now`, with
+    /// the claim's attempt not counted. Jobs whose lease was lost are left.
+    async fn release_jobs(&self, jobs: &[Job], now: Time) -> Result<()>;
     /// Returns false when the lease was lost and the result was discarded.
     async fn complete_job(&self, job: &Job, now: Time) -> Result<bool>;
     /// [`Ledger::complete_job`] for many jobs, in the same order.
@@ -342,7 +376,21 @@ pub trait Ledger: Send + Sync {
         body: &str,
     ) -> Result<bool>;
 
+    // Stored chunk vectors.
+    /// Vectors stored for these (chunk point id, digest) pairs, in the same
+    /// order; `None` where none is stored with that digest.
+    async fn stored_vectors(
+        &self,
+        corpus: &str,
+        keys: &[(String, String)],
+    ) -> Result<Vec<Option<Vec<f32>>>>;
+    /// Store vectors of chunks that still exist; others are skipped.
+    async fn store_vectors(&self, corpus: &str, vectors: &[StoredVector], now: Time) -> Result<()>;
+    /// Delete vectors of chunks removed by a revision before `removed_before`.
+    async fn sweep_vectors(&self, removed_before: Time) -> Result<usize>;
+
     // Forgetting.
+    /// Delete a source and everything derived from it, stored vectors included.
     async fn purge_source(
         &self,
         corpus: &str,
@@ -380,6 +428,53 @@ pub(crate) fn same_source(a: &Source, b: &Source) -> bool {
         && a.title == b.title
         && a.kind == b.kind
         && a.metadata == b.metadata
+}
+
+/// How a batch revises a source the ledger already holds.
+#[derive(Debug, Default)]
+pub(crate) struct Revision {
+    /// Purge the whole old revision: its partition or kind changed.
+    pub full: bool,
+    /// Episodes of the old revision to purge: gone or changed.
+    pub removed: BTreeSet<String>,
+    /// Title, collection or metadata to update in place.
+    pub metadata: bool,
+}
+
+/// Compare a batch with the source and (episode id, content hash) pairs
+/// the ledger holds. Without `replace`, changed metadata is a conflict and
+/// nothing is purged.
+pub(crate) fn revision_plan(
+    existing: &Source,
+    batch: &IngestBatch,
+    held: BTreeSet<(String, String)>,
+) -> Result<Revision> {
+    let src = &batch.source;
+    let same_meta = same_source(existing, src);
+    if !batch.replace {
+        if !same_meta {
+            return Err(KnowledgeError::Conflict(
+                "source already exists with different metadata".into(),
+            ));
+        }
+        return Ok(Revision::default());
+    }
+    if existing.partition != src.partition || existing.kind != src.kind {
+        return Ok(Revision {
+            full: true,
+            ..Revision::default()
+        });
+    }
+    let wanted = episode_set(&batch.episodes);
+    Ok(Revision {
+        full: false,
+        removed: held
+            .into_iter()
+            .filter(|p| !wanted.contains(p))
+            .map(|(id, _)| id)
+            .collect(),
+        metadata: !same_meta,
+    })
 }
 
 /// The (id, content hash) pairs of a batch, to compare revisions.

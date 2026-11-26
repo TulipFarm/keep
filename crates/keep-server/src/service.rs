@@ -34,12 +34,10 @@ use crate::model::ModelSetup;
 use crate::scope::{Scope, ScopeArg};
 use crate::settings::{Settings, check_embedder, database_receipt_key, file_receipt_key};
 
-/// Rounds of extraction/projection jobs run after each ingest, bounded by
-/// `INGEST_JOB_BUDGET` so large batches return before client timeouts and
-/// let the background worker finish remaining jobs.
-const INGEST_JOB_ROUNDS: usize = 50;
-const INGEST_JOB_BATCH: usize = 16;
-const INGEST_JOB_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+/// Rounds of jobs a projection rebuild runs on top of one per 64 queued.
+const REBUILD_EXTRA_ROUNDS: usize = 50;
+/// Default time an ingest spends on its own source's jobs before answering.
+pub const DEFAULT_INGEST_JOB_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 const MAX_LIST_PAGE: usize = 100;
 const DEFAULT_COLLECTION: &str = "general";
 /// Bounds on what one `knowledge_summarize` call reads.
@@ -66,6 +64,11 @@ pub struct ServiceOptions {
     pub evidence_budget: Option<BudgetConfig>,
     /// Chat model for fact extraction and `knowledge_summarize`.
     pub model: Option<ModelSetup>,
+    /// Time an ingest spends running its own source's jobs before it
+    /// answers; the background worker does the rest. Zero runs none inline.
+    pub ingest_job_budget: std::time::Duration,
+    /// Pause between the background worker's job batches.
+    pub job_pause: std::time::Duration,
 }
 
 impl ServiceOptions {
@@ -79,6 +82,8 @@ impl ServiceOptions {
             log_calls: false,
             evidence_budget: None,
             model: None,
+            ingest_job_budget: DEFAULT_INGEST_JOB_BUDGET,
+            job_pause: std::time::Duration::ZERO,
         }
     }
 }
@@ -95,6 +100,7 @@ pub struct KeepService {
     budget: Option<EvidenceBudget>,
     model: Option<ModelSetup>,
     summarizer: Option<SessionSummarizer>,
+    ingest_job_budget: std::time::Duration,
 }
 
 impl KeepService {
@@ -108,7 +114,9 @@ impl KeepService {
             Some(k) => memory.with_receipt_key(k),
             None => memory,
         };
-        let mut knowledge = knowledge.with_tokenizer(opts.tokenizer.clone());
+        let mut knowledge = knowledge
+            .with_tokenizer(opts.tokenizer.clone())
+            .with_job_pause(opts.job_pause);
         let mut summarizer = None;
         if let Some(m) = &opts.model {
             if m.extraction {
@@ -133,6 +141,7 @@ impl KeepService {
             budget: opts.evidence_budget.map(EvidenceBudget::new),
             model: opts.model,
             summarizer,
+            ingest_job_budget: opts.ingest_job_budget,
         }
     }
 
@@ -168,6 +177,8 @@ impl KeepService {
             log_calls: true,
             evidence_budget: args.evidence_budget()?,
             model: args.model.build()?,
+            ingest_job_budget: std::time::Duration::from_millis(args.ingest_job_budget_ms),
+            job_pause: std::time::Duration::from_millis(args.job_pause_ms),
         };
         let config = KnowledgeConfig {
             collection: args.collection.clone(),
@@ -840,21 +851,29 @@ impl KeepService {
         } else {
             self.knowledge.ingest(&corpus, source, episodes).await?
         };
-        // The text is committed. Enrichment that fails from here on leaves it
-        // captured; the response says so instead of reporting an error.
-        let jobs = self
-            .knowledge
-            .run_jobs_with_budget(
-                &corpus,
-                INGEST_JOB_ROUNDS,
-                INGEST_JOB_BATCH,
-                Some(INGEST_JOB_BUDGET),
-            )
-            .await;
-        let enrichment = match &jobs {
-            Ok(_) => self.enrichment(&scope).await,
-            Err(_) => json!({ "state": "unknown" }),
+        // The text is committed. Run this source's own jobs until the
+        // deadline and leave the rest, and every other source's, to the
+        // background worker. Enrichment that fails from here on leaves the
+        // text captured; the response says so instead of reporting an error.
+        let deadline = Instant::now() + self.ingest_job_budget;
+        let jobs = if self.ingest_job_budget.is_zero() {
+            Ok(Default::default())
+        } else {
+            self.knowledge
+                .run_source_jobs(&corpus, &source_id, deadline)
+                .await
         };
+        let (jobs, jobs_error) = match jobs {
+            Ok(run) => (Some(run), None),
+            Err(e) => (None, Some(ApiError::from(e).code.as_str())),
+        };
+        let mut enrichment = match jobs_error {
+            None => self.enrichment(&scope).await,
+            Some(_) => json!({ "state": "unknown" }),
+        };
+        if let Some(code) = jobs_error {
+            enrichment["error"] = json!(code);
+        }
         Ok(json!({
             "scope": scope.label(),
             "sourceId": source_id,
@@ -863,7 +882,7 @@ impl KeepService {
             "captured": true,
             "replaced": report.replaced,
             "report": report,
-            "jobs": jobs.ok(),
+            "jobs": jobs,
             "enrichment": enrichment,
         }))
     }
@@ -1377,7 +1396,7 @@ fn budget_cap(what: &str, asked: usize, cap: usize) -> ApiError {
 
 /// Enough job rounds (64 jobs each) to drain a rebuild, plus slack.
 fn rebuild_rounds(queued: usize) -> usize {
-    queued.div_ceil(64) + INGEST_JOB_ROUNDS
+    queued.div_ceil(64) + REBUILD_EXTRA_ROUNDS
 }
 
 fn allowance(tokens: Option<usize>) -> Result<EvidenceAllowance, ApiError> {

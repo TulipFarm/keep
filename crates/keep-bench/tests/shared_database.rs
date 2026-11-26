@@ -106,7 +106,8 @@ async fn memory_and_knowledge_migrate_into_one_schema_in_either_order() {
             [
                 "knowledge_0001_ledger",
                 "knowledge_0002_source_metadata",
-                "knowledge_0003_episode_cascade_indexes"
+                "knowledge_0003_episode_cascade_indexes",
+                "knowledge_0004_stored_vectors"
             ]
         );
     }

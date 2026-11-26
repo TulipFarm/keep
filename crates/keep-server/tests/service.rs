@@ -815,6 +815,10 @@ fn args(storage: StorageProfile, pg: &str, qdrant: Option<&str>, name: &str) -> 
         evidence_budget_tokens: None,
         evidence_budget_window_secs: 3600,
         evidence_budget_per: BudgetPer::Token,
+        ingest_job_budget_ms: 5000,
+        job_pause_ms: 0,
+        onnx_sessions: None,
+        onnx_threads: None,
         model: Default::default(),
     }
 }
@@ -1305,4 +1309,120 @@ async fn idempotent_retries_replay_after_a_restart() {
     if let Err(e) = result {
         std::panic::resume_unwind(e.into_panic());
     }
+}
+
+/// The hash embedder, `delay` slower per call, as a busy local model is.
+struct SlowEmbedder {
+    inner: keep_providers::HashEmbedder,
+    delay: std::time::Duration,
+}
+
+#[async_trait::async_trait]
+impl keep_providers::Embedder for SlowEmbedder {
+    fn descriptor(&self) -> &keep_providers::ProviderDescriptor {
+        keep_providers::Embedder::descriptor(&self.inner)
+    }
+    fn dimensions(&self) -> usize {
+        keep_providers::Embedder::dimensions(&self.inner)
+    }
+    async fn embed(
+        &self,
+        texts: &[String],
+    ) -> Result<keep_providers::EmbedResponse, keep_providers::ProviderError> {
+        tokio::time::sleep(self.delay).await;
+        keep_providers::Embedder::embed(&self.inner, texts).await
+    }
+}
+
+fn slow_service(budget: std::time::Duration) -> KeepService {
+    use std::sync::Arc;
+    let mut opts = ServiceOptions::new(Scope::new("alex", None).unwrap());
+    opts.ingest_job_budget = budget;
+    let memory = keep_memory::MemoryService::new(
+        Arc::new(keep_memory::InMemoryLedger::new()),
+        Arc::new(keep_memory::InMemoryJournal::new()),
+    );
+    let knowledge = keep_knowledge::profile::in_memory().with_embedder(Arc::new(SlowEmbedder {
+        inner: keep_providers::HashEmbedder::new(256),
+        delay: std::time::Duration::from_millis(300),
+    }));
+    KeepService::new(memory, knowledge, "in-memory", opts)
+}
+
+/// A long document on a slow embedder: the ingest answers soon after its
+/// job budget, says enrichment is pending, and the worker finishes it.
+#[tokio::test]
+async fn ingest_answers_within_its_job_budget() {
+    let text = (0..400)
+        .map(|i| format!("Line {i} of the runbook covers failover drills."))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    for budget in [200, 0] {
+        let svc = slow_service(std::time::Duration::from_millis(budget));
+        let started = std::time::Instant::now();
+        let ingested = ok(
+            &svc,
+            "knowledge_ingest",
+            json!({ "source_id": "runbook", "text": text }),
+        )
+        .await;
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+        assert_eq!(ingested["captured"], true, "{ingested}");
+        assert_eq!(ingested["enrichment"]["state"], "pending", "{ingested}");
+        assert_eq!(ingested["jobs"]["failed"], 0, "{ingested}");
+        if budget == 0 {
+            assert_eq!(ingested["jobs"]["succeeded"], 0, "none run inline");
+        }
+        let mut state = Value::Null;
+        for _ in 0..20 {
+            svc.run_due_jobs().await.unwrap();
+            let status = ok(&svc, "knowledge_status", json!({})).await;
+            state = status["enrichment"]["state"].clone();
+            if state == "complete" {
+                break;
+            }
+        }
+        assert_eq!(state, "complete");
+    }
+}
+
+/// A client sends a document in batches, times out, and resumes: a stored
+/// batch sent again changes nothing, and a retried first batch with
+/// `replace` drops the later batches until they are appended again.
+#[tokio::test]
+async fn batched_ingest_resumes_and_retries() {
+    let svc = in_memory();
+    let batch = |from: usize, replace: bool| {
+        let episodes: Vec<Value> = (from..from + 2)
+            .map(|i| json!({ "id": format!("p{i}"), "text": format!("Section {i} of the escalation policy.") }))
+            .collect();
+        json!({ "source_id": "policy", "kind": "document", "title": "Escalation policy",
+                "metadata": { "url": "https://example.com/policy" },
+                "episodes": episodes, "replace": replace })
+    };
+    let first = ok(&svc, "knowledge_ingest", batch(0, true)).await;
+    assert_eq!(first["report"]["episodes_added"], 2, "{first}");
+    let second = ok(&svc, "knowledge_ingest", batch(2, false)).await;
+    assert_eq!(second["report"]["episodes_added"], 2, "{second}");
+    assert_eq!(second["replaced"], false, "{second}");
+    let again = ok(&svc, "knowledge_ingest", batch(2, false)).await;
+    assert_eq!(again["report"]["episodes_added"], 0, "{again}");
+    assert_eq!(again["report"]["jobs_enqueued"], 0, "{again}");
+    assert_eq!(again["jobs"]["succeeded"], 0, "{again}");
+
+    let retried = ok(&svc, "knowledge_ingest", batch(0, true)).await;
+    assert_eq!(retried["replaced"], true, "{retried}");
+    assert_eq!(retried["report"]["episodes_unchanged"], 2, "{retried}");
+    assert_eq!(retried["report"]["episodes_removed"], 2, "{retried}");
+    let resumed = ok(&svc, "knowledge_ingest", batch(2, false)).await;
+    assert_eq!(resumed["report"]["episodes_added"], 2, "{resumed}");
+    assert_eq!(resumed["enrichment"]["state"], "complete", "{resumed}");
+    let found = ok(
+        &svc,
+        "knowledge_search",
+        json!({ "query": "Section 3 escalation policy" }),
+    )
+    .await;
+    assert!(!found["hits"].as_array().unwrap().is_empty(), "{found}");
 }

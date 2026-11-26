@@ -275,6 +275,7 @@ async fn local_embedder(lm: &LoadedManifest) -> anyhow::Result<Arc<dyn Embedder>
         device: Default::default(),
         intra_threads: None,
         sessions: None,
+        allow_spinning: false,
     }
     .with_env_overrides()?;
     // Everything besides the descriptor that changes a vector.

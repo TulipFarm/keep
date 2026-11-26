@@ -72,8 +72,12 @@ than hidden.
    ([server docs](server.md#model-backed-extraction-and-summaries)).
 5. `ingest_revision` replaces a source whose text or metadata changed: the
    old episodes, chunks, vectors and evidence go and the new ones arrive in
-   one ledger transaction, so reads never see both revisions. Plain
-   `ingest` refuses changed text under an existing episode id. Each write
+   one ledger transaction, so reads never see both revisions. Episodes
+   whose id and content hash are unchanged are kept with their chunks,
+   vectors and facts; only changed or missing ones are purged. A change of
+   partition or kind purges the whole source. Plain `ingest` appends new
+   episodes to a source with the same metadata and refuses changed text
+   under an existing episode id. Each write
    from an extraction job carries the content hash of the episodes it read,
    and the ledger refuses it if they changed meanwhile, so a job still
    working on the old revision cannot attach its facts to the new one.
@@ -266,11 +270,25 @@ cannot reveal a removed source.
 Community detection and LLM-written summaries are interfaces only. They are
 disabled by default (`DisabledSummarizer`).
 
+6. Projection stores each chunk's vector in the ledger, keyed by a digest
+   of the embedder (provider, model, revision, dimensions) and the text, and
+   embeds only texts it has no vector for. A replaced chunk's vector is kept
+   for an hour (`VECTOR_GRACE_SECONDS`), so content that returns, such as a
+   batch sent again after a retry, is not embedded again; `run_due_jobs`
+   sweeps older ones.
+7. `run_source_jobs` runs only one source's jobs until a deadline, checked
+   before each job and each group of 8 projections; jobs not started are
+   handed back as pending. A server ingest uses it, leaving everything else
+   to the background `run_due_jobs`, which can pause between batches
+   (`with_job_pause`).
+
 ## Forgetting
 
 `forget_source` erases a source and everything that exists only because of it:
 
-- its episodes, chunks and their vectors, in pgvector or Qdrant
+- its episodes, chunks and their vectors, in pgvector or Qdrant, and the
+  stored vectors kept for re-projection, at once rather than after the grace
+  period a replace leaves them
 - the evidence it supplied
 - facts left with no evidence, and their vectors
 - index entries, by bumping the generation and dropping caches
