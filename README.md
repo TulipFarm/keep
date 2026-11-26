@@ -56,7 +56,9 @@ curl -fsSL https://keep.tulipfarm.ai/install.sh | sh
 It asks the same questions. It runs on macOS and Linux, and the Postgres
 options need Docker. For a container, use `ghcr.io/tulipfarm/keep:<version>`
 from the [latest release](https://github.com/TulipFarm/keep/releases/latest). See
-[Connecting coding agents](#connecting-coding-agents) for the manual steps.
+[Connecting coding agents](#connecting-coding-agents) for the manual steps. On
+a small or shared host, [CPU use](docs/server.md#cpu-use) lists the settings
+that cap how many cores embedding and background jobs take.
 
 ## Status: research first
 
