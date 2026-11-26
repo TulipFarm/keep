@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream};
@@ -20,7 +21,8 @@ use crate::fusion::{DEFAULT_RRF_K, rrf};
 use crate::index::{IndexRequest, IndexView, normalize, render};
 use crate::ledger::{
     AliasWrite, ApplyOutcome, ChangeSet, EntityWrite, IndexInputs, IngestBatch, IngestReport,
-    KnowledgeError, Ledger, Projection, PurgeReport, Result, VersionWrite, normalize_name,
+    KnowledgeError, Ledger, Projection, PurgeReport, Result, StoredVector, VECTOR_GRACE_SECONDS,
+    VersionWrite, normalize_name,
 };
 use crate::model::{
     Access, Chunk, Entity, Episode, Evidence, Fact, FactStatus, FactVersion, ItemRef, Job,
@@ -273,7 +275,18 @@ pub struct JobRun {
     pub succeeded: usize,
     pub retried: usize,
     pub failed: usize,
+    /// Claimed but handed back unstarted at a deadline; still pending.
+    #[serde(default)]
+    pub deferred: usize,
 }
+
+/// Jobs one claim takes for [`Knowledge::run_source_jobs`].
+pub const SOURCE_JOB_BATCH: usize = 16;
+/// Jobs one claim takes for [`Knowledge::run_due_jobs`].
+pub const BACKGROUND_JOB_BATCH: usize = 16;
+/// Projections embedded and written together. Small, so a deadline is
+/// checked often and one caller never holds the embedder for long.
+pub const PROJECT_GROUP: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForgetReport {
@@ -303,6 +316,8 @@ pub struct Knowledge {
     /// A cross-encoder and how many fused candidates it reorders.
     reranker: Option<(Arc<dyn Reranker>, usize)>,
     snapshots: Arc<Snapshots>,
+    /// Sleep between background job batches; see [`Self::with_job_pause`].
+    job_pause: Duration,
 }
 
 /// Vector namespace for one partition of one corpus. Opaque so labels never
@@ -461,6 +476,7 @@ impl Knowledge {
             collection_ready: tokio::sync::OnceCell::new(),
             reranker: None,
             snapshots: Arc::default(),
+            job_pause: Duration::ZERO,
         }
     }
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
@@ -504,6 +520,14 @@ impl Knowledge {
         self
     }
 
+    /// Sleep `pause` after each group of projections and each batch that
+    /// [`Self::run_due_jobs`] runs, so background work yields CPU to
+    /// requests. Requests' own jobs never pause.
+    pub fn with_job_pause(mut self, pause: Duration) -> Self {
+        self.job_pause = pause;
+        self
+    }
+
     /// Another engine over the same ledger, vectors, embedder, extractor,
     /// tokenizer and config, with its own clock, so independent corpora can
     /// be ingested concurrently.
@@ -521,6 +545,7 @@ impl Knowledge {
             collection_ready: tokio::sync::OnceCell::new(),
             reranker: self.reranker.clone(),
             snapshots: self.snapshots.clone(),
+            job_pause: self.job_pause,
         }
     }
 
@@ -571,7 +596,10 @@ impl Knowledge {
 
     // ----- ingestion -------------------------------------------------------
 
-    /// Add a source's episodes. Re-sending the same episodes is a no-op.
+    /// Add episodes to a source, creating it if needed. Later batches of
+    /// the same source append; re-sending stored episodes is a no-op.
+    /// Different metadata, or different content under a stored episode id,
+    /// is a [`KnowledgeError::Conflict`].
     pub async fn ingest(
         &self,
         corpus: &str,
@@ -581,11 +609,14 @@ impl Knowledge {
         self.ingest_inner(corpus, source, episodes, false).await
     }
 
-    /// Ingest a new revision of a source. If the source exists with
-    /// different metadata or episodes, its old content and everything
-    /// derived only from it is purged and the new episodes are inserted in
-    /// the same ledger transaction, so reads never see both revisions.
-    /// Sending the current revision again is a no-op.
+    /// Ingest a new revision of a source. Episodes whose id and content are
+    /// unchanged are kept with their chunks, vectors and facts; episodes
+    /// missing from or changed in this batch are purged with everything
+    /// derived only from them, and new ones inserted, in the same ledger
+    /// transaction, so reads never see both revisions. Metadata is updated
+    /// in place. Sending the current revision again is a no-op, and text
+    /// that comes back within [`VECTOR_GRACE_SECONDS`] reuses its stored
+    /// vector instead of being embedded again.
     pub async fn ingest_revision(
         &self,
         corpus: &str,
@@ -747,8 +778,7 @@ impl Knowledge {
     }
 
     /// Run due jobs in batches of up to `batch_size`, stopping between rounds
-    /// once `budget` has elapsed so synchronous callers never block past their
-    /// request timeout while a background worker drains the rest.
+    /// once `budget` has elapsed. The first round always runs.
     pub async fn run_jobs_with_budget(
         &self,
         corpus: &str,
@@ -756,9 +786,21 @@ impl Knowledge {
         batch_size: usize,
         budget: Option<std::time::Duration>,
     ) -> Result<JobRun> {
+        self.run_rounds(corpus, max_rounds, batch_size, budget, Duration::ZERO)
+            .await
+    }
+
+    async fn run_rounds(
+        &self,
+        corpus: &str,
+        max_rounds: usize,
+        batch_size: usize,
+        budget: Option<std::time::Duration>,
+        pause: Duration,
+    ) -> Result<JobRun> {
         let mut run = JobRun::default();
         let batch_size = batch_size.max(1);
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         for round in 0..max_rounds {
             if round > 0 && budget.is_some_and(|b| started.elapsed() >= b) {
                 break;
@@ -772,49 +814,125 @@ impl Knowledge {
             if jobs.is_empty() {
                 break;
             }
-            let (project, other): (Vec<Job>, Vec<Job>) =
-                jobs.into_iter().partition(|j| j.kind == JobKind::Project);
-            let mut outcomes: Vec<(Job, JobOutcome)> = stream::iter(other)
-                .map(|job| async move {
-                    let _t = timing::span(match job.kind {
-                        JobKind::Extract => "knowledge.extract_episode",
-                        _ => "knowledge.unproject",
-                    })
-                    .items(1);
-                    let r = match job.kind {
-                        JobKind::Extract => self.extract_episode(corpus, &job.target).await,
-                        _ => self.unproject(&job.target).await,
-                    };
-                    (job, r.map_err(|e| (e.to_string(), retryable(&e))))
+            self.run_batch(corpus, jobs, None, pause, &mut run).await?;
+        }
+        Ok(run)
+    }
+
+    /// Run due jobs derived from one source (see
+    /// [`Ledger::claim_source_jobs`]) until `deadline`, for a caller that
+    /// must answer in time. Other sources' jobs are left to the background
+    /// worker. The deadline is checked before each job, and before each
+    /// group of [`PROJECT_GROUP`] projections, so the overrun is at most one
+    /// job or group; claimed jobs not started by then are handed back
+    /// unstarted and counted as [`JobRun::deferred`].
+    pub async fn run_source_jobs(
+        &self,
+        corpus: &str,
+        source_id: &str,
+        deadline: Instant,
+    ) -> Result<JobRun> {
+        let mut run = JobRun::default();
+        while Instant::now() < deadline {
+            let t = timing::span("knowledge.jobs_claim");
+            let jobs = self
+                .ledger
+                .claim_source_jobs(corpus, source_id, self.clock.now(), SOURCE_JOB_BATCH)
+                .await?;
+            drop(t.items(jobs.len()));
+            if jobs.is_empty() {
+                break;
+            }
+            self.run_batch(corpus, jobs, Some(deadline), Duration::ZERO, &mut run)
+                .await?;
+        }
+        Ok(run)
+    }
+
+    /// Run claimed jobs, recording their outcomes. Jobs not started before
+    /// `deadline` are released. `pause` sleeps after each projection group,
+    /// so a background caller leaves CPU for requests.
+    async fn run_batch(
+        &self,
+        corpus: &str,
+        jobs: Vec<Job>,
+        deadline: Option<Instant>,
+        pause: Duration,
+        run: &mut JobRun,
+    ) -> Result<()> {
+        let past = move || deadline.is_some_and(|d| Instant::now() >= d);
+        let (project, other): (Vec<Job>, Vec<Job>) =
+            jobs.into_iter().partition(|j| j.kind == JobKind::Project);
+        let mut released = Vec::new();
+        let ran: Vec<(Job, Option<JobOutcome>)> = stream::iter(other)
+            .map(|job| async move {
+                if past() {
+                    return (job, None);
+                }
+                let _t = timing::span(match job.kind {
+                    JobKind::Extract => "knowledge.extract_episode",
+                    _ => "knowledge.unproject",
                 })
-                .buffered(self.extract_concurrency)
-                .collect()
-                .await;
-            match self.project(corpus, &project).await {
-                Ok(()) => outcomes.extend(project.into_iter().map(|j| (j, Ok(())))),
+                .items(1);
+                let r = match job.kind {
+                    JobKind::Extract => self.extract_episode(corpus, &job.target).await,
+                    _ => self.unproject(&job.target).await,
+                };
+                (job, Some(r.map_err(|e| (e.to_string(), retryable(&e)))))
+            })
+            .buffered(self.extract_concurrency)
+            .collect()
+            .await;
+        let mut outcomes: Vec<(Job, JobOutcome)> = Vec::new();
+        for (job, r) in ran {
+            match r {
+                Some(r) => outcomes.push((job, r)),
+                None => released.push(job),
+            }
+        }
+        let groups: Vec<&[Job]> = project.chunks(PROJECT_GROUP).collect();
+        for (i, group) in groups.iter().enumerate() {
+            if past() {
+                released.extend(group.iter().cloned());
+                continue;
+            }
+            match self.project(corpus, group).await {
+                Ok(()) => outcomes.extend(group.iter().map(|j| (j.clone(), Ok(())))),
                 Err(e) => {
                     let msg = (e.to_string(), retryable(&e));
-                    outcomes.extend(project.into_iter().map(|j| (j, Err(msg.clone()))));
+                    outcomes.extend(group.iter().map(|j| (j.clone(), Err(msg.clone()))));
                 }
             }
-            let _t = timing::span("knowledge.jobs_finish").items(outcomes.len());
-            let mut done = Vec::new();
-            for (job, r) in outcomes {
-                match r {
-                    Ok(()) => done.push(job),
-                    Err((msg, retry)) => {
-                        let now = self.clock.now();
-                        match self.ledger.fail_job(&job, &msg, retry, now).await? {
-                            JobState::RetryScheduled => run.retried += 1,
-                            _ => run.failed += 1,
-                        }
+            if !pause.is_zero() && i + 1 < groups.len() {
+                tokio::time::sleep(pause).await;
+            }
+        }
+        let _t = timing::span("knowledge.jobs_finish").items(outcomes.len());
+        let mut done = Vec::new();
+        for (job, r) in outcomes {
+            match r {
+                Ok(()) => done.push(job),
+                Err((msg, retry)) => {
+                    let now = self.clock.now();
+                    match self.ledger.fail_job(&job, &msg, retry, now).await? {
+                        JobState::RetryScheduled => run.retried += 1,
+                        _ => run.failed += 1,
                     }
                 }
             }
-            let completed = self.ledger.complete_jobs(&done, self.clock.now()).await?;
-            run.succeeded += completed.into_iter().filter(|&ok| ok).count();
         }
-        Ok(run)
+        let completed = self.ledger.complete_jobs(&done, self.clock.now()).await?;
+        run.succeeded += completed.into_iter().filter(|&ok| ok).count();
+        if !released.is_empty() {
+            self.ledger
+                .release_jobs(&released, self.clock.now())
+                .await?;
+            run.deferred += released.len();
+        }
+        if !pause.is_zero() {
+            tokio::time::sleep(pause).await;
+        }
+        Ok(())
     }
 
     /// Background jobs of one partition by state. See [`Ledger::job_counts`].
@@ -850,16 +968,27 @@ impl Knowledge {
     }
 
     /// Run due jobs of every corpus that has some, up to `max_corpora`
-    /// corpora and `max_rounds` batches each. For a background worker, so
-    /// retries and deferred vector deletions finish without a new request.
+    /// corpora and `max_rounds` batches of [`BACKGROUND_JOB_BATCH`] each,
+    /// pausing as set by [`Self::with_job_pause`]. For a background worker,
+    /// so retries, deferred vector deletions and work an ingest left behind
+    /// finish without a new request. Also sweeps stored vectors whose grace
+    /// period has passed.
     pub async fn run_due_jobs(&self, max_corpora: usize, max_rounds: usize) -> Result<JobRun> {
+        let now = self.clock.now();
+        self.ledger
+            .sweep_vectors(now - chrono::Duration::seconds(VECTOR_GRACE_SECONDS))
+            .await?;
         let mut total = JobRun::default();
-        for corpus in self
-            .ledger
-            .due_corpora(self.clock.now(), max_corpora)
-            .await?
-        {
-            let run = self.run_jobs(&corpus, max_rounds).await?;
+        for corpus in self.ledger.due_corpora(now, max_corpora).await? {
+            let run = self
+                .run_rounds(
+                    &corpus,
+                    max_rounds,
+                    BACKGROUND_JOB_BATCH,
+                    None,
+                    self.job_pause,
+                )
+                .await?;
             total.succeeded += run.succeeded;
             total.retried += run.retried;
             total.failed += run.failed;
@@ -900,10 +1029,7 @@ impl Knowledge {
                 return Ok(());
             }
             self.ensure_collection().await?;
-            let texts: Vec<String> = items.iter().map(|(_, p)| p.text.clone()).collect();
-            let t = timing::span("knowledge.embed").items(texts.len());
-            let vectors = self.embedder.embed(&texts).await?.vectors;
-            drop(t);
+            let vectors = self.vectors_for(corpus, &items).await?;
             let mut by_ns: BTreeMap<String, Vec<VectorPoint>> = BTreeMap::new();
             for ((id, p), vector) in items.iter().zip(vectors) {
                 by_ns
@@ -949,6 +1075,79 @@ impl Knowledge {
         Err(KnowledgeError::Conflict(
             "items kept changing while projecting".into(),
         ))
+    }
+
+    /// What a stored vector of `text` is keyed by: the embedder and the
+    /// exact text, so another model or changed text never reuses it.
+    fn vector_digest(&self, text: &str) -> String {
+        let d = self.embedder.descriptor();
+        digest_hex(&[
+            "vector",
+            &d.provider,
+            &d.model,
+            &d.revision,
+            &self.embedder.dimensions().to_string(),
+            text,
+        ])
+    }
+
+    /// Vectors for items to project. Chunks whose text the ledger already
+    /// holds a vector for reuse it; the rest are embedded, each distinct
+    /// text once, and chunks' new vectors are stored for next time.
+    async fn vectors_for(
+        &self,
+        corpus: &str,
+        items: &[(String, Projection)],
+    ) -> Result<Vec<Vec<f32>>> {
+        let keys: Vec<(String, String)> = items
+            .iter()
+            .map(|(id, p)| (id.clone(), self.vector_digest(&p.text)))
+            .collect();
+        let t = timing::span("knowledge.vectors_read").items(keys.len());
+        let mut found = self.ledger.stored_vectors(corpus, &keys).await?;
+        drop(t);
+        let mut texts: Vec<String> = Vec::new();
+        let mut slot: HashMap<&str, usize> = HashMap::new();
+        for ((_, p), v) in items.iter().zip(&found) {
+            if v.is_none() && !slot.contains_key(p.text.as_str()) {
+                slot.insert(&p.text, texts.len());
+                texts.push(p.text.clone());
+            }
+        }
+        if texts.is_empty() {
+            return Ok(found.into_iter().map(Option::unwrap_or_default).collect());
+        }
+        let t = timing::span("knowledge.embed").items(texts.len());
+        let embedded = self.embedder.embed(&texts).await?.vectors;
+        drop(t);
+        if embedded.len() != texts.len() {
+            return Err(KnowledgeError::Provider(
+                keep_providers::ProviderError::Malformed {
+                    message: format!(
+                        "embedder returned {} vectors for {} texts",
+                        embedded.len(),
+                        texts.len()
+                    ),
+                },
+            ));
+        }
+        let mut fresh = Vec::new();
+        for (((id, p), (_, digest)), v) in items.iter().zip(&keys).zip(found.iter_mut()) {
+            if v.is_none() {
+                let vector = embedded[slot[p.text.as_str()]].clone();
+                fresh.push(StoredVector {
+                    point_id: id.clone(),
+                    digest: digest.clone(),
+                    vector: vector.clone(),
+                });
+                *v = Some(vector);
+            }
+        }
+        let _t = timing::span("knowledge.vectors_store").items(fresh.len());
+        self.ledger
+            .store_vectors(corpus, &fresh, self.clock.now())
+            .await?;
+        Ok(found.into_iter().map(Option::unwrap_or_default).collect())
     }
 
     async fn unproject(&self, target: &str) -> Result<()> {

@@ -14,8 +14,8 @@ use tokio_postgres::{Client, GenericClient, Row, Transaction};
 
 use crate::ledger::{
     ApplyOutcome, ChangeSet, EntityStat, IndexInputs, IngestBatch, IngestReport, KnowledgeError,
-    Ledger, MAX_JOB_ATTEMPTS, Projection, PurgeReport, Result, SourceStat, episode_set,
-    normalize_name, retry_delay, same_source,
+    Ledger, MAX_JOB_ATTEMPTS, Projection, PurgeReport, Result, Revision, SourceStat, StoredVector,
+    normalize_name, retry_delay, revision_plan,
 };
 use crate::memory_ledger::{LEASE_SECONDS, splice_versions};
 use crate::model::{
@@ -35,6 +35,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "knowledge_0003_episode_cascade_indexes",
         include_str!("../migrations/knowledge_0003_episode_cascade_indexes.sql"),
+    ),
+    (
+        "knowledge_0004_stored_vectors",
+        include_str!("../migrations/knowledge_0004_stored_vectors.sql"),
     ),
 ];
 
@@ -417,7 +421,7 @@ impl Ledger for PgLedger {
         let src = &batch.source;
         let corpus = src.corpus.as_str();
         let mut report = IngestReport::default();
-        let mut old = tx
+        let old = tx
             .query_opt(
                 "SELECT * FROM knowledge_sources WHERE corpus = $1 AND id = $2 FOR UPDATE",
                 &[&corpus, &src.id],
@@ -425,35 +429,48 @@ impl Ledger for PgLedger {
             .await
             .map_err(db)?
             .map(|r| source_row(&r));
+        let mut plan = Revision::default();
         if let Some(prev) = &old {
-            let same_meta = same_source(prev, src);
-            let changed = batch.replace
-                && (!same_meta
-                    || {
-                        let held: BTreeSet<(String, String)> = tx
-                    .query(
-                        "SELECT id, content_hash FROM knowledge_episodes WHERE corpus = $1 AND source_id = $2",
-                        &[&corpus, &src.id],
-                    )
-                    .await
-                    .map_err(db)?
-                    .iter()
-                    .map(|r| (r.get(0), r.get(1)))
-                    .collect();
-                        held != episode_set(&batch.episodes)
-                    });
-            if changed {
-                let purged = purge_tx(&tx, corpus, prev, batch.now).await?;
-                report.replaced = true;
-                report.purged = Some(purged);
-                old = None;
-            } else if !same_meta {
-                return Err(KnowledgeError::Conflict(
-                    "source already exists with different metadata".into(),
-                ));
+            let held: BTreeSet<(String, String)> = if batch.replace {
+                tx.query(
+                    "SELECT id, content_hash FROM knowledge_episodes WHERE corpus = $1 AND source_id = $2",
+                    &[&corpus, &src.id],
+                )
+                .await
+                .map_err(db)?
+                .iter()
+                .map(|r| (r.get(0), r.get(1)))
+                .collect()
+            } else {
+                BTreeSet::new()
+            };
+            plan = revision_plan(prev, &batch, held)?;
+            if plan.full {
+                report.purged = Some(purge_tx(&tx, corpus, prev, None, false, batch.now).await?);
+            } else if !plan.removed.is_empty() {
+                let only: Vec<String> = plan.removed.iter().cloned().collect();
+                report.purged =
+                    Some(purge_tx(&tx, corpus, prev, Some(&only), false, batch.now).await?);
+            }
+            report.episodes_removed = report.purged.as_ref().map_or(0, |p| p.episodes as usize);
+            report.replaced = plan.full || !plan.removed.is_empty() || plan.metadata;
+            if plan.metadata && !plan.full {
+                tx.execute(
+                    "UPDATE knowledge_sources SET collection = $3, title = $4, metadata = $5
+                     WHERE corpus = $1 AND id = $2",
+                    &[
+                        &corpus,
+                        &src.id,
+                        &src.collection,
+                        &src.title,
+                        &serde_json::to_value(&src.metadata).map_err(db)?,
+                    ],
+                )
+                .await
+                .map_err(db)?;
             }
         }
-        if old.is_none() {
+        if old.is_none() || plan.full {
             tx.execute(
                 "INSERT INTO knowledge_sources (corpus, id, partition_label, collection, title, kind, created_at, metadata)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
@@ -550,6 +567,18 @@ impl Ledger for PgLedger {
                     &chs.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
                     &chs.iter().map(|c| c.occurred_at).collect::<Vec<_>>(),
                     &chs.iter().map(|c| c.recorded_at).collect::<Vec<_>>(),
+                ],
+            )
+            .await
+            .map_err(db)?;
+        }
+        if !chs.is_empty() {
+            tx.execute(
+                "UPDATE knowledge_vectors SET removed_at = NULL
+                 WHERE corpus = $1 AND point_id = ANY($2) AND removed_at IS NOT NULL",
+                &[
+                    &corpus,
+                    &chs.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
                 ],
             )
             .await
@@ -1047,6 +1076,62 @@ impl Ledger for PgLedger {
         Ok(jobs)
     }
 
+    async fn claim_source_jobs(
+        &self,
+        corpus: &str,
+        source_id: &str,
+        now: Time,
+        limit: usize,
+    ) -> Result<Vec<Job>> {
+        let c = self.client().await?;
+        let lease_until = now + chrono::Duration::seconds(LEASE_SECONDS);
+        let mut jobs: Vec<Job> = c
+            .query(
+                "UPDATE knowledge_jobs SET state = 'running', attempts = attempts + 1,
+                        lease = nextval('knowledge_job_lease_seq'), next_attempt_at = $4
+                 WHERE id IN (
+                   SELECT j.id FROM knowledge_jobs j
+                   WHERE j.corpus = $1 AND j.state IN ('pending', 'retry_scheduled', 'running')
+                     AND j.next_attempt_at <= $3
+                     AND j.target IN (
+                       SELECT id FROM knowledge_episodes WHERE corpus = $1 AND source_id = $2
+                       UNION ALL
+                       SELECT id FROM knowledge_chunks WHERE corpus = $1 AND source_id = $2
+                       UNION ALL
+                       SELECT fact_id FROM knowledge_evidence WHERE corpus = $1 AND source_id = $2)
+                   ORDER BY j.id LIMIT $5
+                   FOR UPDATE OF j SKIP LOCKED)
+                 RETURNING *",
+                &[&corpus, &source_id, &now, &lease_until, &(limit as i64)],
+            )
+            .await
+            .map_err(db)?
+            .iter()
+            .map(job_row)
+            .collect();
+        jobs.sort_by_key(|j| j.id);
+        Ok(jobs)
+    }
+
+    async fn release_jobs(&self, jobs: &[Job], now: Time) -> Result<()> {
+        if jobs.is_empty() {
+            return Ok(());
+        }
+        let c = self.client().await?;
+        let ids: Vec<i64> = jobs.iter().map(|j| j.id).collect();
+        let leases: Vec<Option<i64>> = jobs.iter().map(|j| j.lease).collect();
+        c.execute(
+            "UPDATE knowledge_jobs AS k SET state = 'pending', lease = NULL,
+                    attempts = GREATEST(k.attempts - 1, 0), next_attempt_at = $3
+             FROM unnest($1::int8[], $2::int8[]) AS j(id, lease)
+             WHERE k.id = j.id AND k.lease = j.lease AND k.state = 'running'",
+            &[&ids, &leases, &now],
+        )
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
     async fn complete_job(&self, job: &Job, _now: Time) -> Result<bool> {
         let c = self.client().await?;
         let n = c
@@ -1354,6 +1439,109 @@ impl Ledger for PgLedger {
         Ok(n == 1)
     }
 
+    async fn stored_vectors(
+        &self,
+        corpus: &str,
+        keys: &[(String, String)],
+    ) -> Result<Vec<Option<Vec<f32>>>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let c = self.client().await?;
+        let ids: Vec<&str> = keys.iter().map(|(id, _)| id.as_str()).collect();
+        let digests: Vec<&str> = keys.iter().map(|(_, d)| d.as_str()).collect();
+        let mut found: BTreeMap<String, Vec<f32>> = c
+            .query(
+                "SELECT v.point_id, v.vector FROM knowledge_vectors v
+                 JOIN unnest($2::text[], $3::text[]) AS k(id, digest)
+                   ON v.point_id = k.id AND v.digest = k.digest
+                 WHERE v.corpus = $1",
+                &[&corpus, &ids, &digests],
+            )
+            .await
+            .map_err(db)?
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        Ok(keys.iter().map(|(id, _)| found.remove(id)).collect())
+    }
+
+    async fn store_vectors(&self, corpus: &str, vectors: &[StoredVector], now: Time) -> Result<()> {
+        if vectors.is_empty() {
+            return Ok(());
+        }
+        let mut c = self.client().await?;
+        let tx = c.transaction().await.map_err(db)?;
+        // Share-lock the chunks so a purge running meanwhile either waits
+        // for this insert and then deletes the rows, or has already removed
+        // the chunks and nothing is stored.
+        let live: BTreeMap<String, String> = tx
+            .query(
+                "SELECT id, source_id FROM knowledge_chunks WHERE corpus = $1 AND id = ANY($2)
+                 FOR SHARE",
+                &[
+                    &corpus,
+                    &vectors
+                        .iter()
+                        .map(|v| v.point_id.as_str())
+                        .collect::<Vec<_>>(),
+                ],
+            )
+            .await
+            .map_err(db)?
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        // One statement per 256 rows rather than a round trip per vector.
+        let rows: Vec<(&StoredVector, &String)> = vectors
+            .iter()
+            .filter_map(|v| live.get(&v.point_id).map(|s| (v, s)))
+            .collect();
+        for part in rows.chunks(256) {
+            let mut sql = String::from(
+                "INSERT INTO knowledge_vectors (corpus, point_id, source_id, digest, vector, stored_at) VALUES ",
+            );
+            let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&corpus, &now];
+            for (i, (v, source_id)) in part.iter().enumerate() {
+                let n = 3 + i * 4;
+                if i > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push_str(&format!(
+                    "($1, ${n}, ${}, ${}, ${}, $2)",
+                    n + 1,
+                    n + 2,
+                    n + 3
+                ));
+                params.extend([
+                    &v.point_id as &(dyn tokio_postgres::types::ToSql + Sync),
+                    *source_id,
+                    &v.digest,
+                    &v.vector,
+                ]);
+            }
+            sql.push_str(
+                " ON CONFLICT (corpus, point_id) DO UPDATE
+                 SET source_id = EXCLUDED.source_id, digest = EXCLUDED.digest,
+                     vector = EXCLUDED.vector, stored_at = EXCLUDED.stored_at, removed_at = NULL",
+            );
+            tx.execute(sql.as_str(), &params).await.map_err(db)?;
+        }
+        tx.commit().await.map_err(db)
+    }
+
+    async fn sweep_vectors(&self, removed_before: Time) -> Result<usize> {
+        let c = self.client().await?;
+        let n = c
+            .execute(
+                "DELETE FROM knowledge_vectors WHERE removed_at < $1",
+                &[&removed_before],
+            )
+            .await
+            .map_err(db)?;
+        Ok(n as usize)
+    }
+
     async fn purge_source(
         &self,
         corpus: &str,
@@ -1373,7 +1561,7 @@ impl Ledger for PgLedger {
         else {
             return Ok(None);
         };
-        let report = purge_tx(&tx, corpus, &src, now).await?;
+        let report = purge_tx(&tx, corpus, &src, None, true, now).await?;
         tx.commit().await.map_err(db)?;
         Ok(Some(report))
     }
@@ -1421,6 +1609,7 @@ impl Ledger for PgLedger {
             "knowledge_sources",
             "knowledge_jobs",
             "knowledge_index_cache",
+            "knowledge_vectors",
         ] {
             tx.execute(
                 &format!("DELETE FROM {table} WHERE corpus = $1"),
@@ -1434,31 +1623,45 @@ impl Ledger for PgLedger {
     }
 }
 
-/// Delete a source and everything derived only from it, inside `tx`.
+/// Delete episodes of `src` (with `None`, the whole source) and everything
+/// derived only from them, inside `tx`. With `forget` the source's stored
+/// vectors go at once; otherwise removed chunks' vectors wait out the grace
+/// period.
 async fn purge_tx(
     tx: &Transaction<'_>,
     corpus: &str,
     src: &Source,
+    only: Option<&[String]>,
+    forget: bool,
     now: Time,
 ) -> Result<PurgeReport> {
     let mut report = PurgeReport {
         partition: src.partition.clone(),
         ..Default::default()
     };
-    let episode_ids: Vec<String> = tx
-        .query(
-            "SELECT id FROM knowledge_episodes WHERE corpus = $1 AND source_id = $2",
-            &[&corpus, &src.id],
-        )
-        .await
-        .map_err(db)?
-        .iter()
-        .map(|r| r.get(0))
-        .collect();
+    let episode_ids: Vec<String> = match only {
+        Some(ids) => tx
+            .query(
+                "SELECT id FROM knowledge_episodes WHERE corpus = $1 AND source_id = $2 AND id = ANY($3)",
+                &[&corpus, &src.id, &ids],
+            )
+            .await
+            .map_err(db)?,
+        None => tx
+            .query(
+                "SELECT id FROM knowledge_episodes WHERE corpus = $1 AND source_id = $2",
+                &[&corpus, &src.id],
+            )
+            .await
+            .map_err(db)?,
+    }
+    .iter()
+    .map(|r| r.get(0))
+    .collect();
     let chunk_ids: Vec<String> = tx
         .query(
-            "SELECT id FROM knowledge_chunks WHERE corpus = $1 AND source_id = $2 ORDER BY id",
-            &[&corpus, &src.id],
+            "SELECT id FROM knowledge_chunks WHERE corpus = $1 AND episode_id = ANY($2) ORDER BY id",
+            &[&corpus, &episode_ids],
         )
         .await
         .map_err(db)?
@@ -1467,27 +1670,52 @@ async fn purge_tx(
         .collect();
     let touched: Vec<String> = tx
         .query(
-            "SELECT DISTINCT fact_id FROM knowledge_evidence WHERE corpus = $1 AND source_id = $2",
-            &[&corpus, &src.id],
+            "SELECT DISTINCT fact_id FROM knowledge_evidence WHERE corpus = $1 AND episode_id = ANY($2)",
+            &[&corpus, &episode_ids],
         )
         .await
         .map_err(db)?
         .iter()
         .map(|r| r.get(0))
         .collect();
-    // Cascades to episodes, chunks and their evidence.
-    tx.execute(
-        "DELETE FROM knowledge_sources WHERE corpus = $1 AND id = $2",
-        &[&corpus, &src.id],
-    )
-    .await
-    .map_err(db)?;
-    tx.execute(
-        "DELETE FROM knowledge_evidence WHERE corpus = $1 AND source_id = $2",
-        &[&corpus, &src.id],
-    )
-    .await
-    .map_err(db)?;
+    if only.is_some() {
+        // Cascades to the episodes' chunks and evidence.
+        tx.execute(
+            "DELETE FROM knowledge_episodes WHERE corpus = $1 AND id = ANY($2)",
+            &[&corpus, &episode_ids],
+        )
+        .await
+        .map_err(db)?;
+    } else {
+        // Cascades to episodes, chunks and their evidence.
+        tx.execute(
+            "DELETE FROM knowledge_sources WHERE corpus = $1 AND id = $2",
+            &[&corpus, &src.id],
+        )
+        .await
+        .map_err(db)?;
+        tx.execute(
+            "DELETE FROM knowledge_evidence WHERE corpus = $1 AND source_id = $2",
+            &[&corpus, &src.id],
+        )
+        .await
+        .map_err(db)?;
+    }
+    if forget {
+        tx.execute(
+            "DELETE FROM knowledge_vectors WHERE corpus = $1 AND source_id = $2",
+            &[&corpus, &src.id],
+        )
+        .await
+        .map_err(db)?;
+    } else {
+        tx.execute(
+            "UPDATE knowledge_vectors SET removed_at = $3 WHERE corpus = $1 AND point_id = ANY($2)",
+            &[&corpus, &chunk_ids, &now],
+        )
+        .await
+        .map_err(db)?;
+    }
     let dead: BTreeSet<String> = tx
         .query(
             "DELETE FROM knowledge_facts f WHERE f.corpus = $1 AND f.id = ANY($2)
@@ -1536,8 +1764,12 @@ async fn purge_tx(
             insert_version(tx, corpus, &f.id, v).await?;
         }
     }
+    // Aliases are recorded per source, not per episode: they stay while
+    // any episode of the source does.
     tx.execute(
-        "DELETE FROM knowledge_entity_aliases WHERE corpus = $1 AND source_id = $2",
+        "DELETE FROM knowledge_entity_aliases WHERE corpus = $1 AND source_id = $2
+           AND NOT EXISTS (SELECT 1 FROM knowledge_episodes
+                           WHERE corpus = $1 AND source_id = $2)",
         &[&corpus, &src.id],
     )
     .await
