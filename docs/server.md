@@ -709,6 +709,36 @@ In `~/.copilot/mcp-config.json`:
 }
 ```
 
+### OpenCode
+
+```sh
+opencode mcp add keep --global \
+  --env KEEP_STORAGE=postgres-vector \
+  --env KEEP_POSTGRES_URL='postgres://keep:keep-local-only@127.0.0.1:15433/keep' \
+  --env KEEP_AGENT=opencode \
+  -- keep --project billing-api mcp
+```
+
+Or in `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "keep": {
+        "type": "local",
+        "command": ["keep", "--project", "billing-api", "mcp"],
+        "environment": {
+          "KEEP_STORAGE": "postgres-vector",
+          "KEEP_POSTGRES_URL": "{env:KEEP_POSTGRES_URL}",
+          "KEEP_AGENT": "opencode"
+        }
+      }
+    }
+  }
+}
+```
+
 ### Other clients
 
 Any MCP client that can start a stdio server works the same way. Run

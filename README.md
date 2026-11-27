@@ -36,16 +36,18 @@ Rust. It is built around two primitives:
 
 ## Quick start
 
-Paste this into Claude Code, Codex or Copilot CLI:
+Paste this into Claude Code, Codex, Copilot CLI or OpenCode:
 
 ```text
 Read https://keep.tulipfarm.ai/install.md and install Keep for me.
 ```
 
-The agent follows [install.md](https://keep.tulipfarm.ai/install.md): it asks
-where to store memory (Postgres + pgvector, Postgres + Qdrant, or in memory),
-builds Keep, starts it on 127.0.0.1:7357 and connects Claude Code, Codex and
-Copilot CLI if they are installed. Restart your agents afterwards.
+The agent follows [install.md](https://keep.tulipfarm.ai/install.md): it checks
+what is installed on your machine, asks whether to run locally or connect
+remotely (and which database to use), enables Keep for your chosen harnesses
+(all detected by default), discovers existing harness memories to review and
+import into Keep, and shows a complete setup guide. Restart your agents
+afterwards.
 
 Or run the installer yourself:
 

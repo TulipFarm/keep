@@ -17,10 +17,10 @@ export const setupPrompt = "Read https://keep.tulipfarm.ai/install.md and instal
 
 export const install = {
   heading: "Install in one step",
-  lead: "Keep asks where to store memory, then connects your coding agents. Runs on macOS and Linux.",
-  agent: { title: "Ask your agent", cmd: setupPrompt, note: "Paste this into Claude Code, Codex or Copilot CLI. Your agent runs the installer, then checks that Keep is working." },
-  script: { title: "Or run the script", cmd: "curl -fsSL https://keep.tulipfarm.ai/install.sh | sh", note: "Installs Rust if needed and builds Keep from source. The first build takes a few minutes. The Postgres options need Docker." },
-  links: [["Read install.md", "/install.md"], ["View install.sh", "/install.sh"]] as [string, string][],
+  lead: "Paste one prompt into your AI assistant. It sets up Keep locally or remotely, connects your apps, imports existing memories, and runs in the background. macOS and Linux.",
+  agent: { title: "Ask your agent", cmd: setupPrompt, note: "Paste this into Claude Code, Codex, Copilot CLI or OpenCode. Your agent handles setup in plain English, connects your apps, and imports existing memories." },
+  script: { title: "Or run the script", cmd: "curl -fsSL https://keep.tulipfarm.ai/install.sh | sh", note: "Picks free ports automatically, installs a background service (launchd / systemd), and adds ~/.keep/inspect.sh to view your memory graph." },
+  links: [["Read install.md", "/install.md"], ["View install.sh", "/install.sh"], ["View uninstall.sh", "/uninstall.sh"]] as [string, string][],
   copy: "Copy",
   copied: "Copied",
 };
@@ -28,12 +28,12 @@ export const install = {
 export const hero = {
   badge: "Open source · Apache-2.0 · Research preview",
   headline: "Memory your agents can't quietly rewrite.",
-  sub: "Keep is open-source memory and knowledge for AI agents. Keep gives Claude Code, Codex and Copilot CLI one shared memory per project. Every change is a revision. When a fact changes, the old one is marked superseded, not deleted.",
+  sub: "Keep is open-source memory and knowledge for AI agents. Keep gives Claude Code, Claude Desktop, Codex, Copilot CLI and OpenCode one shared memory. Every change is a revision. When a fact changes, the old one is marked superseded, not deleted.",
   note: "Keep is a research preview. It works, but it is early.",
   primary: "Get Keep on GitHub",
   secondary: "Read the setup docs",
   copy: "Copy setup prompt",
-  worksWith: ["Claude Code", "Codex", "Copilot CLI", "Any MCP client"],
+  worksWith: ["Claude Code", "Claude Desktop", "Codex", "Copilot CLI", "OpenCode", "Cursor", "Any MCP client"],
   storesIn: ["In memory", "Postgres + pgvector", "Postgres + Qdrant"],
   snippetLabel: "Install from source, then connect any MCP agent",
   snippet: [
@@ -178,11 +178,11 @@ export const faq: [string, string][] = [
   ],
   [
     "Which agents and models does Keep work with?",
-    "Claude Code, Codex and Copilot CLI. The installer connects each one that is installed. Any MCP client that can start a stdio server works too. Keep sets no chat model for you. Your agent keeps its own.",
+    "Claude Code, Claude Desktop, Codex, Copilot CLI, OpenCode, Cursor, and any MCP client that can start a stdio server. The agentic installer detects your apps, connects the ones you want, and offers to import existing memories. Keep sets no chat model for you. Your agent keeps its own.",
   ],
   [
     "Can I run Keep myself?",
-    "Yes. Ask your coding agent to follow install.md, or run install.sh yourself. Both build Keep on your machine and store memory in process or in a local Postgres. To build by hand, use `cargo install`. Docker Compose files are in the repo.",
+    "Yes. Paste the install.md prompt into your coding agent, or run install.sh yourself. Both set up Keep locally or connect to a remote server, pick free ports automatically, and install a background service (launchd / systemd). Remove it anytime with uninstall.sh.",
   ],
   ["Is Keep open source?", "Yes. Keep is Apache-2.0 and the code is public on GitHub."],
   [

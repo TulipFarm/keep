@@ -9,6 +9,7 @@ import docker from "../assets/logos/docker.svg?raw";
 
 export const logos: Record<string, string[]> = {
   "Claude Code": [claude],
+  "Claude Desktop": [claude],
   Codex: [codex],
   "Copilot CLI": [copilot],
   "Any MCP client": [mcp],
