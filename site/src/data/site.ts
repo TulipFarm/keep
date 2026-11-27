@@ -20,7 +20,7 @@ export const install = {
   lead: "Paste one prompt into your AI assistant. It sets up Keep locally or remotely, connects your apps, imports existing memories, and runs in the background. macOS and Linux.",
   agent: { title: "Ask your agent", cmd: setupPrompt, note: "Paste this into Claude Code, Codex, Copilot CLI or OpenCode. Your agent handles setup in plain English, connects your apps, and imports existing memories." },
   script: { title: "Or run the script", cmd: "curl -fsSL https://keep.tulipfarm.ai/install.sh | sh", note: "Picks free ports automatically, installs a background service (launchd / systemd), and adds ~/.keep/inspect.sh to view your memory graph." },
-  links: [["Read install.md", "/install.md"], ["View install.sh", "/install.sh"], ["View uninstall.sh", "/uninstall.sh"]] as [string, string][],
+  links: [["Read install.md", "/install.md"], ["View install.sh", "/install.sh"], ["Read uninstall.md", "/uninstall.md"], ["View uninstall.sh", "/uninstall.sh"]] as [string, string][],
   copy: "Copy",
   copied: "Copied",
 };
@@ -182,7 +182,7 @@ export const faq: [string, string][] = [
   ],
   [
     "Can I run Keep myself?",
-    "Yes. Paste the install.md prompt into your coding agent, or run install.sh yourself. Both set up Keep locally or connect to a remote server, pick free ports automatically, and install a background service (launchd / systemd). Remove it anytime with uninstall.sh.",
+    "Yes. Paste the install.md prompt into your coding agent, or run install.sh yourself. Both set up Keep locally or connect to a remote server, pick free ports automatically, and install a background service (launchd / systemd). Remove it anytime with uninstall.md or uninstall.sh.",
   ],
   ["Is Keep open source?", "Yes. Keep is Apache-2.0 and the code is public on GitHub."],
   [
