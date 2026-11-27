@@ -317,15 +317,21 @@ keep --project my-app serve --dev
 ```
 
 ```
-  collection ── source ──evidence──▶ entity ──fact──▶ entity
-                   ▲                    ▲
-                cites               mentions
-                   └──── Memory file ───┘
+  collection ── source ◀──evidence── entity ──fact / names──▶ entity
+                                      ▲    ▲
+                                  cites    mentions
+                                      └── Memory file
 ```
 
 - Dots are Knowledge collections, sources, entities and categories, and
-  Memory files. Lines are facts, evidence, and the links a Memory file has
-  to sources (`cites`) and entities (`mentions`).
+  Memory files. Lines are facts between two entities, evidence (an entity
+  to the source that says it), and the links a Memory file has to entities:
+  `cites` when an entry cites one of its facts, `mentions` when the text
+  names it.
+- When a fact's value is text that names another entity, such as
+  "companion: Harry Potter", a `names` line joins the two. Extraction from
+  documents keeps most values as text, so these lines carry most of a
+  document graph's structure.
 - Entities are grouped into clusters (Louvain) and laid out with
   ForceAtlas2. Click a cluster to zoom in, or a dot to see its facts and
   where they came from. Keys: `/` find, `Esc` clear, `Backspace` back.

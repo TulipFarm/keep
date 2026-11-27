@@ -10,8 +10,8 @@ use keep_knowledge::model::FactStatus;
 use keep_memory::service::FileView;
 use serde::Serialize;
 
-/// Shortest entity name a Memory file's text is matched against, so short
-/// names such as "Al" do not link every file.
+/// Shortest entity name a Memory file or fact value is matched against, so
+/// short names such as "Al" do not link everything.
 const MIN_MENTION_CHARS: usize = 4;
 
 #[derive(Debug, Default, Serialize)]
@@ -94,6 +94,7 @@ pub fn build(scope: String, slice: &GraphSlice, memory: MemoryTree<'_>) -> Graph
     let sources: BTreeSet<&str> = slice.sources.iter().map(|s| s.id.as_str()).collect();
     let entities: BTreeSet<&str> = slice.entities.iter().map(|e| e.id.as_str()).collect();
     let mut attributes: BTreeMap<&str, Vec<serde_json::Value>> = BTreeMap::new();
+    let mut values: Vec<(&str, &str, String)> = Vec::new();
     let mut evidence = BTreeSet::new();
     for f in &slice.facts {
         if !entities.contains(f.subject.as_str()) {
@@ -108,14 +109,17 @@ pub fn build(scope: String, slice: &GraphSlice, memory: MemoryTree<'_>) -> Graph
                 kind: "fact",
                 label: f.predicate.replace('_', " "),
             }),
-            None => attributes
-                .entry(&f.subject)
-                .or_default()
-                .push(serde_json::json!({
-                    "predicate": f.predicate.replace('_', " "),
-                    "object": f.object,
-                    "status": status.as_str(),
-                })),
+            None => {
+                attributes
+                    .entry(&f.subject)
+                    .or_default()
+                    .push(serde_json::json!({
+                        "predicate": f.predicate.replace('_', " "),
+                        "object": f.object,
+                        "status": status.as_str(),
+                    }));
+                values.push((&f.subject, &f.predicate, f.object.to_lowercase()));
+            }
         }
         for e in &f.evidence {
             if sources.contains(e.source_id.as_str())
@@ -147,11 +151,60 @@ pub fn build(scope: String, slice: &GraphSlice, memory: MemoryTree<'_>) -> Graph
             data,
         });
     }
-    add_memory(&mut g, slice, memory);
+    let names = entity_names(slice);
+    add_names(&mut g, &values, &names);
+    add_memory(&mut g, slice, memory, &names);
     g
 }
 
-fn add_memory(g: &mut Graph, slice: &GraphSlice, memory: MemoryTree<'_>) {
+/// Every entity name and alias long enough to match, lowercased.
+fn entity_names(slice: &GraphSlice) -> Vec<(String, &str)> {
+    slice
+        .entities
+        .iter()
+        .flat_map(|e| {
+            std::iter::once(&e.name)
+                .chain(&e.aliases)
+                .filter(|n| n.chars().count() >= MIN_MENTION_CHARS)
+                .map(move |n| (n.to_lowercase(), e.id.as_str()))
+        })
+        .collect()
+}
+
+/// Links an entity to each other entity a fact value names, such as
+/// "companion: Harry Potter". The extractor keeps such values as text, so
+/// without this a document's entities would stand apart. One edge per pair.
+fn add_names(g: &mut Graph, values: &[(&str, &str, String)], names: &[(String, &str)]) {
+    let mut seen: BTreeSet<(&str, &str)> = g
+        .edges
+        .iter()
+        .filter(|e| e.kind == "fact")
+        .map(|e| pair(&e.source, &e.target))
+        .collect();
+    let mut out = Vec::new();
+    for (subject, predicate, value) in values {
+        for (name, entity) in names {
+            if entity != subject && !seen.contains(&pair(subject, entity)) && mentions(value, name)
+            {
+                seen.insert(pair(subject, entity));
+                out.push(Edge {
+                    id: format!("{subject}~{entity}"),
+                    source: (*subject).to_owned(),
+                    target: (*entity).to_owned(),
+                    kind: "names",
+                    label: predicate.replace('_', " "),
+                });
+            }
+        }
+    }
+    g.edges.extend(out);
+}
+
+fn pair<'a>(a: &'a str, b: &'a str) -> (&'a str, &'a str) {
+    if a <= b { (a, b) } else { (b, a) }
+}
+
+fn add_memory(g: &mut Graph, slice: &GraphSlice, memory: MemoryTree<'_>, names: &[(String, &str)]) {
     let live: Vec<&FileView> = memory.files.iter().filter(|f| f.file.is_live()).collect();
     if live.is_empty() {
         return;
@@ -171,16 +224,6 @@ fn add_memory(g: &mut Graph, slice: &GraphSlice, memory: MemoryTree<'_>) {
             });
         }
     }
-    let names: Vec<(String, &str)> = slice
-        .entities
-        .iter()
-        .flat_map(|e| {
-            std::iter::once(&e.name)
-                .chain(&e.aliases)
-                .filter(|n| n.chars().count() >= MIN_MENTION_CHARS)
-                .map(move |n| (n.to_lowercase(), e.id.as_str()))
-        })
-        .collect();
     let facts: BTreeMap<&str, &keep_knowledge::model::Fact> =
         slice.facts.iter().map(|f| (f.id.as_str(), f)).collect();
     for f in live {
@@ -235,7 +278,7 @@ fn add_memory(g: &mut Graph, slice: &GraphSlice, memory: MemoryTree<'_>) {
             }
         }
         let text = f.revision.text().to_lowercase();
-        for (name, entity) in &names {
+        for (name, entity) in names {
             if !linked.contains(entity) && mentions(&text, name) {
                 linked.insert(entity);
                 g.edges.push(Edge {
@@ -268,7 +311,47 @@ fn category_id(id: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::mentions;
+    use super::{Edge, Graph, add_names, mentions};
+
+    #[test]
+    fn fact_values_link_the_entities_they_name_once_per_pair() {
+        let mut g = Graph::default();
+        g.edges.push(Edge {
+            id: "f1".into(),
+            source: "hermione".into(),
+            target: "hedwig".into(),
+            kind: "fact",
+            label: "knows".into(),
+        });
+        let values = [
+            ("hedwig", "companion", "harry potter".to_owned()),
+            (
+                "hedwig",
+                "owner",
+                "harry potter, then hermione granger".to_owned(),
+            ),
+            ("harry", "pet", "hedwig".to_owned()),
+            ("harry", "full_name", "harry james potter".to_owned()),
+        ];
+        let names = [
+            ("harry potter".to_owned(), "harry"),
+            ("hermione granger".to_owned(), "hermione"),
+            ("hedwig".to_owned(), "hedwig"),
+        ];
+        add_names(&mut g, &values, &names);
+        let links: Vec<_> = g.edges[1..]
+            .iter()
+            .map(|e| {
+                (
+                    e.source.as_str(),
+                    e.target.as_str(),
+                    e.kind,
+                    e.label.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(links, [("hedwig", "harry", "names", "companion")]);
+    }
 
     #[test]
     fn mentions_match_whole_words_only() {

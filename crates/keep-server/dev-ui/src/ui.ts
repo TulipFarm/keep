@@ -95,7 +95,7 @@ const LAYERS: Layer[] = [
     title: "Knowledge",
     hint: "Facts that Keep read from your documents",
     nodes: ["entity", "source", "collection"],
-    edges: ["fact", "evidence", "in_collection"],
+    edges: ["fact", "names", "evidence", "in_collection"],
   },
   {
     title: "Memory",
@@ -112,10 +112,17 @@ const KIND_HINTS: Partial<Record<NodeKind | EdgeKind, string>> = {
   file: "a Memory Markdown file",
   category: "a Memory folder",
   fact: "entity to entity",
+  names: "a fact's value names another entity",
   evidence: "entity to the source that says it",
   mentions: "Memory file names an entity",
   cites: "Memory entry cites a fact",
 };
+
+/** Facts between two entities plus facts whose value is text. */
+function factCount(data: GraphData) {
+  const text = data.nodes.reduce((n, x) => n + ((x.data?.attributes as unknown[] | undefined)?.length ?? 0), 0);
+  return data.edges.filter((e) => e.kind === "fact").length + text;
+}
 
 export function stats(data: GraphData, viewer: Viewer): HTMLElement {
   const { nodes, edges } = counts(data);
@@ -124,7 +131,7 @@ export function stats(data: GraphData, viewer: Viewer): HTMLElement {
     "div",
     { class: "stats" },
     cell(nodes.get("entity") ?? 0, "entities"),
-    cell(edges.get("fact") ?? 0, "facts"),
+    cell(factCount(data), "facts"),
     cell(nodes.get("source") ?? 0, "sources"),
     cell(viewer.clusters.length, "clusters"),
     cell(nodes.get("file") ?? 0, "memory files"),
@@ -275,7 +282,7 @@ export function inspector(viewer: Viewer, data: GraphData) {
     el.dataset.mode = n ? "node" : "overview";
     if (!n) return overview();
     const near = viewer.neighbours(n.id);
-    const isLink = (x: Link) => x.edge.kind === "fact" || x.edge.kind === "cites" || x.edge.kind === "mentions";
+    const isLink = (x: Link) => ["fact", "names", "cites", "mentions"].includes(x.edge.kind);
     const links = groupLinks(near.filter(isLink));
     const other = near.filter((x) => !isLink(x));
     const attrs = (n.data?.attributes as { predicate: string; object: string; status: string }[] | undefined) ?? [];
