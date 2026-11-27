@@ -4,6 +4,9 @@ https://:project.pages.dev/*
 /install.sh
   X-Robots-Tag: noindex
   Content-Type: text/plain; charset=utf-8
+/uninstall.sh
+  X-Robots-Tag: noindex
+  Content-Type: text/plain; charset=utf-8
 /install.md
   X-Robots-Tag: noindex
   Content-Type: text/markdown; charset=utf-8

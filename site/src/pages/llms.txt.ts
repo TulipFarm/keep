@@ -9,7 +9,8 @@ export const GET = () =>
 Status: Keep is a research preview. No benchmark results are published yet.
 
 - [Homepage in Markdown](https://keep.tulipfarm.ai/index.md): what Keep does, where it runs, status, FAQ
-- [Install instructions for agents](https://keep.tulipfarm.ai/install.md): the file a coding agent follows to install Keep
+- [Install instructions for agents](https://keep.tulipfarm.ai/install.md): plain-English agentic setup (local or remote, harness detection, memory import, background service)
+- [Install script](https://keep.tulipfarm.ai/install.sh) and [Uninstall script](https://keep.tulipfarm.ai/uninstall.sh)
 - [Memory](${docs.memory})
 - [Knowledge](${docs.knowledge})
 - [Server and agent setup](${docs.server})
