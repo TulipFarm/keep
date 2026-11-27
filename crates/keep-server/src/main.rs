@@ -78,6 +78,10 @@ async fn main() -> anyhow::Result<()> {
                 args.insecure_http,
             )
             .map_err(anyhow::Error::msg)?;
+            if args.dev {
+                keep_server::config::check_dev(&args.bind, auth.is_open())
+                    .map_err(anyhow::Error::msg)?;
+            }
             if auth.token_count() > 0 {
                 eprintln!("keep: {} scoped tokens loaded", auth.token_count());
             }
@@ -90,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
                 max_body_bytes: args.max_body_bytes,
                 tls,
                 insecure_http: args.insecure_http,
+                dev: args.dev,
             };
             http::serve(service, config).await
         }

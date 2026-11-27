@@ -2180,6 +2180,47 @@ impl Knowledge {
     /// Entities and facts around a starting entity (id, name or alias).
     /// Depth is capped at 2, fan-out per entity at 25, nodes at the
     /// configured maximum.
+    /// The readable part of the graph: sources, up to `limit` current facts
+    /// (newest first) and the entities they name. Under a source allowlist,
+    /// only allowed sources and the facts they support.
+    pub async fn graph(
+        &self,
+        corpus: &str,
+        access: &Access,
+        limit: usize,
+    ) -> Result<crate::ledger::GraphSlice> {
+        let scope = self.scope(corpus, access).await?;
+        if scope.is_empty() {
+            return Ok(Default::default());
+        }
+        let mut slice = self.ledger.graph(corpus, &scope.parts, limit).await?;
+        if let Some(allowed) = &scope.sources {
+            slice.sources.retain(|s| allowed.contains(&s.id));
+        }
+        let mut facts = Vec::with_capacity(slice.facts.len());
+        for f in &slice.facts {
+            if access.allows(&f.partition)
+                && let Some(f) = self.restricted(&scope, f).await?
+            {
+                facts.push(f);
+            }
+        }
+        let named: BTreeSet<&str> = facts
+            .iter()
+            .flat_map(|f| std::iter::once(f.subject.as_str()).chain(f.object_entity.as_deref()))
+            .collect();
+        slice
+            .entities
+            .retain(|e| access.allows(&e.partition) && named.contains(e.id.as_str()));
+        if let Some(list) = &scope.list {
+            for e in &mut slice.entities {
+                e.aliases = self.ledger.aliases_from(corpus, &e.id, list).await?;
+            }
+        }
+        slice.facts = facts;
+        Ok(slice)
+    }
+
     pub async fn traverse(
         &self,
         corpus: &str,

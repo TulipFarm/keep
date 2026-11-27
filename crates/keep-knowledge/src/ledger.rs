@@ -166,6 +166,17 @@ pub struct IndexInputs {
     pub entities: Vec<EntityStat>,
 }
 
+/// What the graph view draws from some partitions: their sources, the most
+/// recently recorded facts and the entities those facts name.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct GraphSlice {
+    pub sources: Vec<Source>,
+    pub facts: Vec<Fact>,
+    pub entities: Vec<Entity>,
+    /// More facts exist than the limit allowed.
+    pub truncated: bool,
+}
+
 /// What a purge removed. Point ids let the engine clean the projection.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PurgeReport {
@@ -366,6 +377,9 @@ pub trait Ledger: Send + Sync {
         partitions: &[String],
         collections: &[String],
     ) -> Result<Vec<String>>;
+    /// Every source in `partitions`, at most `limit` facts with a current
+    /// version (most recently recorded first) and the entities they name.
+    async fn graph(&self, corpus: &str, partitions: &[String], limit: usize) -> Result<GraphSlice>;
     async fn cached_index(&self, corpus: &str, partition: &str) -> Result<Option<(i64, String)>>;
     /// Store a built index only if `generation` is still current.
     async fn store_index(

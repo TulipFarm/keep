@@ -61,6 +61,8 @@ pub struct ServeConfig {
     pub tls: Option<Arc<rustls::ServerConfig>>,
     /// Allow plain HTTP on a non-loopback address.
     pub insecure_http: bool,
+    /// Also serve the graph view under `/dev`; see [`crate::dev`].
+    pub dev: bool,
 }
 
 /// Listen until Ctrl-C. Refuses non-loopback addresses without a token, and
@@ -72,11 +74,15 @@ pub async fn serve(service: Arc<KeepService>, config: ServeConfig) -> anyhow::Re
         max_body_bytes,
         tls,
         insecure_http,
+        dev,
     } = config;
     if let Some(warning) = check_bind(&bind, !auth.is_open(), tls.is_some(), insecure_http)
         .map_err(anyhow::Error::msg)?
     {
         eprintln!("keep: warning: {warning}");
+    }
+    if dev {
+        crate::config::check_dev(&bind, auth.is_open()).map_err(anyhow::Error::msg)?;
     }
     let tcp = tokio::net::TcpListener::bind(bind).await?;
     eprintln!(
@@ -89,7 +95,15 @@ pub async fn serve(service: Arc<KeepService>, config: ServeConfig) -> anyhow::Re
             "required"
         }
     );
-    let app = router(service, auth, max_body_bytes);
+    let mut app = router(service.clone(), auth, max_body_bytes);
+    if dev {
+        app = app.merge(crate::dev::routes(service));
+        eprintln!(
+            "keep: graph view on {}://{}/dev/graph",
+            if tls.is_some() { "https" } else { "http" },
+            tcp.local_addr()?
+        );
+    }
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -250,7 +264,7 @@ fn guard_open(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
 
 /// `localhost`, a loopback IP literal or a bracketed IPv6 one, with an
 /// optional port.
-fn is_loopback_host(host: &str) -> bool {
+pub(crate) fn is_loopback_host(host: &str) -> bool {
     let name = if let Some(rest) = host.strip_prefix('[') {
         match rest.split_once(']') {
             Some((ip, port)) if port.is_empty() || port.starts_with(':') => ip,

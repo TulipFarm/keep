@@ -130,6 +130,8 @@ async fn suite(label: &str, env: &Env) {
     evidence_budget(env).await;
     eprintln!("[{label}] traverse");
     traverse(env).await;
+    eprintln!("[{label}] graph");
+    graph(env).await;
     eprintln!("[{label}] table of contents");
     table_of_contents(env).await;
     eprintln!("[{label}] projection rebuild");
@@ -1707,6 +1709,66 @@ async fn traverse(env: &Env) {
     assert_eq!(narrow.edges.len(), 1);
     assert!(narrow.truncated);
     k.delete_corpus(c).await.unwrap();
+}
+
+async fn graph(env: &Env) {
+    let k = &env.k;
+    let c = "graph";
+    env.clock.set(day(2024, 9, 1));
+    for (id, partition, text) in [
+        ("pub", "team", "Mira Sato works on Project Heron."),
+        ("sec", "hr", "Ingrid Falk works at Bluefin Partners."),
+        ("more", "team", "Lena Park leads Project Juniper."),
+    ] {
+        k.ingest(
+            c,
+            source(id, partition, "docs", id),
+            vec![turn(&format!("{id}1"), day(2024, 9, 1), text)],
+        )
+        .await
+        .unwrap();
+    }
+    k.run_jobs(c, 20).await.unwrap();
+    let names = |slice: &keep_knowledge::GraphSlice| {
+        let mut n: Vec<String> = slice.entities.iter().map(|e| e.name.clone()).collect();
+        n.sort();
+        n
+    };
+    let source_ids = |slice: &keep_knowledge::GraphSlice| {
+        let mut n: Vec<String> = slice.sources.iter().map(|s| s.id.clone()).collect();
+        n.sort();
+        n
+    };
+
+    let all = k.graph(c, &everyone(), 100).await.unwrap();
+    assert_eq!(source_ids(&all), ["more", "pub", "sec"]);
+    assert!(names(&all).contains(&"Bluefin Partners".to_string()));
+    assert!(!all.truncated);
+    for f in &all.facts {
+        assert!(all.entities.iter().any(|e| e.id == f.subject));
+    }
+
+    let team = k.graph(c, &Access::to(["team"]), 100).await.unwrap();
+    assert_eq!(source_ids(&team), ["more", "pub"]);
+    assert!(team.facts.iter().all(|f| f.partition == "team"));
+    for secret in ["Ingrid Falk", "Bluefin Partners"] {
+        assert!(
+            !names(&team).contains(&secret.to_string()),
+            "leaked {secret}"
+        );
+    }
+
+    let one = k.graph(c, &only(&["pub"]), 100).await.unwrap();
+    assert_eq!(source_ids(&one), ["pub"]);
+    assert!(names(&one).contains(&"Mira Sato".to_string()));
+    assert!(!names(&one).contains(&"Lena Park".to_string()));
+
+    let cut = k.graph(c, &everyone(), 1).await.unwrap();
+    assert_eq!(cut.facts.len(), 1);
+    assert!(cut.truncated);
+
+    let none = k.graph(c, &Access::to(["nobody"]), 100).await.unwrap();
+    assert!(none.sources.is_empty() && none.facts.is_empty() && none.entities.is_empty());
 }
 
 async fn table_of_contents(env: &Env) {
