@@ -233,6 +233,23 @@ in `KEEP_MODEL_DEPLOYMENT`, or `azure-deployments` with
 `KEEP_MODEL_API_VERSION` as well. Keys go in an `api-key` header for the
 Azure styles unless `KEEP_MODEL_AUTH_HEADER` says otherwise.
 
+To use your GitHub Copilot subscription instead, set
+`KEEP_MODEL_API_STYLE=copilot-cli`. Keep then runs the signed-in `copilot`
+CLI (or `KEEP_COPILOT_BIN`) once per call, with no tools and an empty
+working directory. It needs no endpoint or key, but it needs a cap on AI
+credits:
+
+```sh
+export KEEP_MODEL_API_STYLE=copilot-cli
+export KEEP_MODEL_NAME=gpt-5.6-luna
+export KEEP_MODEL_BUDGET_CREDITS=100
+export KEEP_MODEL_TIMEOUT_SECS=180
+```
+
+The CLI adds its own hidden system prompt and does not pin the upstream
+model, so use it for development and demos, not for benchmark claims.
+`GET /v1/health` reports the credits spent so far.
+
 - Extraction runs in the job queue: each episode is read on its own, cut at
   whitespace into turns of at most 4,000 characters and calls of at most 8
   turns, and every fact cites the episode it came from. There is no
@@ -244,9 +261,10 @@ Azure styles unless `KEEP_MODEL_AUTH_HEADER` says otherwise.
   a malformed reply, a configuration error or an exhausted budget fails the
   job after its attempts (`failed`). The ingested text stays searchable
   either way.
-- `KEEP_MODEL_BUDGET_*` caps the calls and tokens one process may use; past
-  a cap every call fails with `budget exhausted` until restart. Nothing
-  converts tokens to money, so set the caps from your price.
+- `KEEP_MODEL_BUDGET_*` caps the calls and tokens one process may use, and
+  `KEEP_MODEL_BUDGET_CREDITS` the Copilot AI credits; past a cap every call
+  fails with `budget exhausted` until restart. Nothing converts tokens to
+  money, so set the caps from your price.
 - Bad configuration, such as an endpoint without a model name, both key
   variables, or a zero budget, stops the server at start-up.
 - `GET /v1/health` reports the model name, endpoint host and style, and the
