@@ -185,7 +185,7 @@ Use this concise snippet:
        - `~/.keep/inspect.sh --full` — full content of every memory file
        - `~/.keep/inspect.sh --entity "<name>"` — traverse the knowledge graph around an entity
    - **What to do next**: restart each connected AI app so it loads Keep, then ask it *"What do you remember about me from Keep?"* to verify.
-   - **Managing Keep later**: tell them they can ask their AI agent anytime to pause (`~/.keep/stop.sh`), restart (`~/.keep/start.sh`), or uninstall Keep (`curl -fsSL https://keep.tulipfarm.ai/uninstall.sh | sh`, or with `--purge` to also erase stored data).
+   - **Managing Keep later**: tell them they can ask their AI agent anytime to pause (`~/.keep/stop.sh`), restart (`~/.keep/start.sh`), or uninstall Keep (by pasting `Follow https://keep.tulipfarm.ai/uninstall.md` into their agent, or running `curl -fsSL https://keep.tulipfarm.ai/uninstall.sh | sh`).
 
 ## 8. Manual MCP configuration reference
 

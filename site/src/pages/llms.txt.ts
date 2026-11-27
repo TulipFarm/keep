@@ -10,6 +10,7 @@ Status: Keep is a research preview. No benchmark results are published yet.
 
 - [Homepage in Markdown](https://keep.tulipfarm.ai/index.md): what Keep does, where it runs, status, FAQ
 - [Install instructions for agents](https://keep.tulipfarm.ai/install.md): plain-English agentic setup (local or remote, harness detection, memory import, background service)
+- [Uninstall instructions for agents](https://keep.tulipfarm.ai/uninstall.md): plain-English agentic uninstall (optional Markdown backup, app disconnect, safe by default)
 - [Install script](https://keep.tulipfarm.ai/install.sh) and [Uninstall script](https://keep.tulipfarm.ai/uninstall.sh)
 - [Memory](${docs.memory})
 - [Knowledge](${docs.knowledge})
