@@ -48,6 +48,7 @@ function mix(fg: string, bg: string, alpha: number): string {
 
 const INK = { light: "#1d1a14", dark: "#f2ecdc" };
 const PAPER = { light: "#f7f2e6", dark: "#16130e" };
+const MAX_NAMED = 24;
 
 function style(g: Graph, clusters: Cluster[], dark: boolean) {
   const kinds = dark ? KIND_COLORS.dark : KIND_COLORS.light;
@@ -89,13 +90,21 @@ export function mountGraph(container: HTMLElement, data: GraphData, opts: Viewer
   const inCluster = new Set<string>();
   let labels = true;
   const lit = new Set<string>();
+  // A hub can have hundreds of neighbours; naming them all draws an unreadable pile.
+  const named = new Set<string>();
 
   const refreshLit = () => {
     lit.clear();
+    named.clear();
     const focus = hovered ?? selected;
     if (!focus || !g.hasNode(focus)) return;
     lit.add(focus);
     g.forEachNeighbor(focus, (n) => lit.add(n));
+    named.add(focus);
+    [...lit]
+      .sort((a, b) => g.getNodeAttribute(b, "size") - g.getNodeAttribute(a, "size"))
+      .slice(0, MAX_NAMED)
+      .forEach((n) => named.add(n));
   };
 
   const dim = dark ? "#2b261d" : "#e4dcc8";
@@ -151,7 +160,7 @@ export function mountGraph(container: HTMLElement, data: GraphData, opts: Viewer
       if (lit.size > 0) {
         if (lit.has(id)) {
           out.zIndex = 2;
-          out.forceLabel = true;
+          out.forceLabel = named.has(id);
           if (id === (hovered ?? selected)) out.highlighted = true;
         } else {
           out.color = dim;
@@ -182,7 +191,7 @@ export function mountGraph(container: HTMLElement, data: GraphData, opts: Viewer
           out.color = mix(INK[dark ? "dark" : "light"], PAPER[dark ? "dark" : "light"], 0.65);
           out.size = 1.5;
           out.zIndex = 2;
-          out.label = a.label;
+          out.label = named.has(s) && named.has(t) ? a.label : "";
         } else {
           out.hidden = true;
         }
