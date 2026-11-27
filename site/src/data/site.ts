@@ -59,6 +59,12 @@ export const does: [string, string][] = [
   ["Shows where it came from.", "Every fact links to the text that supports it."],
 ];
 
+export const fandom = {
+  heading: "See how Keep files a fandom",
+  lead: "We gave Keep 142 pages of the Harry Potter Wiki. It read them into the people, places and things they name, the facts about each, and the page each fact came from. Click any dot.",
+  hint: "Scroll to zoom · drag to move · click a dot",
+};
+
 export const where = {
   heading: "Where it runs",
   lead: "On your machine. Keep calls no hosted service.",

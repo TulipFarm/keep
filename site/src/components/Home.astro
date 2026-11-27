@@ -1,10 +1,11 @@
 ---
 import { sh, esc } from "../data/highlight";
 import { logos } from "../data/logos";
-import { hero, sections, repo, docs, flow, does, demo, setupPrompt, where, install } from "../data/site";
+import { hero, sections, repo, docs, flow, does, demo, setupPrompt, where, install, fandom } from "../data/site";
 import { timeline, keys, day, span, start, end } from "../data/timeline";
 import Visual from "./Visual.astro";
 import Faq from "./Faq.astro";
+import FandomGraph from "./FandomGraph.astro";
 
 const rows = Object.entries(keys).map(([k, label]) => ({
   k,
@@ -107,6 +108,12 @@ const first = day("2026-05-01");
     <div class="does">
       {does.map(([t, d]) => <div><h3>{t}</h3><p>{d}</p></div>)}
     </div>
+  </section>
+
+  <section class="wrap sec fandom" id="fandom">
+    <h2>{fandom.heading}</h2>
+    <p class="lead">{fandom.lead}</p>
+    <FandomGraph />
   </section>
 
   <section class="wrap sec" id="install">
@@ -317,6 +324,8 @@ const first = day("2026-05-01");
   #tm-req { min-height: 7.5em; white-space: pre-wrap; }
 
   .sec { border-top: 2.5px solid #0a0a0a; margin-top: 80px; padding-top: 48px; }
+  .fandom { display: grid; gap: 20px; }
+  .fandom .lead { max-width: 60ch; }
   .g { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
   .num { font: 800 1rem var(--font-mono); background: #0a0a0a; color: #dcff5a; padding: 2px 10px; justify-self: start; font-variant-numeric: normal; }
   .txt { display: grid; gap: 16px; }

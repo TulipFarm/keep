@@ -12,6 +12,8 @@ cargo run -p keep-bench -- dry-run fixtures/manifests/longmemeval-mock.toml
 cargo run -p keep-server -- --project demo mcp          # MCP server, in-memory
 cargo run -p keep-server -- --project demo serve        # HTTP on 127.0.0.1:7357
 cargo run -p keep-server -- --project demo mcp --server http://127.0.0.1:7357
+cargo run -p keep-server -- --project demo serve --dev  # graph view on /dev/graph
+(cd crates/keep-server/dev-ui && pnpm install && pnpm check && pnpm build)  # commit dist/graph.js
 ```
 
 Server tests force `KEEP_EMBEDDER=hash` and a data directory under `target/`,

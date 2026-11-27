@@ -463,3 +463,111 @@ async fn an_open_server_refuses_browser_requests() {
     .await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
 }
+
+async fn get_dev(
+    app: &Router,
+    uri: &str,
+    headers: &[(&str, &str)],
+) -> (StatusCode, header::HeaderMap, Vec<u8>) {
+    let mut req = Request::builder().uri(uri);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let res = app
+        .clone()
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let headers = res.headers().clone();
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    (status, headers, bytes.to_vec())
+}
+
+#[tokio::test]
+async fn dev_graph_draws_knowledge_and_memory() {
+    let svc = Arc::new(KeepService::in_memory(ServiceOptions::new(
+        Scope::new("alex", Some("api".into())).unwrap(),
+    )));
+    let app = router(svc.clone(), None, 1 << 20).merge(keep_server::dev::routes(svc));
+    let (s, r) = send(
+        &app,
+        "POST",
+        "/v1/knowledge/ingest",
+        Some(json!({ "title": "Kickoff", "collection": "meetings", "text": "Mira Sato works at Northwind Labs." })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    let (s, w) = send(
+        &app,
+        "POST",
+        "/v1/memory/write",
+        Some(json!({ "path": "/topics/team.md", "text": "- Ask Mira Sato about billing.\n" })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{w}");
+
+    let local = [("host", "127.0.0.1:7357")];
+    let (s, _, body) = get_dev(&app, "/dev/graph.json", &local).await;
+    assert_eq!(s, StatusCode::OK);
+    let g: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(g["scope"], "user:alex/project:api");
+    let nodes = g["nodes"].as_array().unwrap();
+    let edges = g["edges"].as_array().unwrap();
+    let id_of = |kind: &str, label: &str| {
+        nodes
+            .iter()
+            .find(|n| n["kind"] == kind && n["label"] == label)
+            .unwrap_or_else(|| panic!("no {kind} {label} in {g}"))["id"]
+            .clone()
+    };
+    let mira = id_of("entity", "Mira Sato");
+    let northwind = id_of("entity", "Northwind Labs");
+    let kickoff = id_of("source", "Kickoff");
+    let file = id_of("file", "Team");
+    let has = |kind: &str, s: &Value, t: &Value| {
+        edges
+            .iter()
+            .any(|e| e["kind"] == kind && &e["source"] == s && &e["target"] == t)
+    };
+    assert!(has("fact", &mira, &northwind), "{g}");
+    assert!(has("evidence", &mira, &kickoff), "{g}");
+    assert!(
+        has("in_collection", &kickoff, &json!("collection:meetings")),
+        "{g}"
+    );
+    assert!(has("mentions", &file, &mira), "{g}");
+
+    let (s, _, body) = get_dev(&app, "/dev/graph.json?user=sam", &local).await;
+    assert_eq!(s, StatusCode::OK);
+    let other: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(other["scope"], "user:sam/project:api");
+    assert!(other["nodes"].as_array().unwrap().is_empty(), "{other}");
+
+    let (s, headers, page) = get_dev(&app, "/dev/graph", &local).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(String::from_utf8(page).unwrap().contains("graph.js"));
+    let csp = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+    for path in ["/dev/graph.js", "/dev/graph.css"] {
+        assert_eq!(
+            get_dev(&app, path, &local).await.0,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+
+    let (s, _, _) = get_dev(&app, "/dev/graph.json?max_facts=0", &local).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    for headers in [
+        &[][..],
+        &[("host", "keep.example.com")][..],
+        &[
+            ("host", "127.0.0.1:7357"),
+            ("origin", "https://evil.example"),
+        ][..],
+    ] {
+        let (s, _, _) = get_dev(&app, "/dev/graph.json", headers).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{headers:?}");
+    }
+}

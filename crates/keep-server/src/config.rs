@@ -327,6 +327,10 @@ pub struct HttpArgs {
     /// Largest accepted request body, in bytes.
     #[arg(long, env = "KEEP_MAX_BODY_BYTES", default_value_t = 1 << 20)]
     pub max_body_bytes: usize,
+    /// Serve a graph view of Memory and Knowledge at `/dev/graph`, for
+    /// development. Needs a loopback address and no token.
+    #[arg(long, env = "KEEP_DEV")]
+    pub dev: bool,
 }
 
 /// The bearer token comes from the environment only, so it never shows in
@@ -372,6 +376,23 @@ pub fn check_bind(
     ))
 }
 
+/// The dev graph view has no authentication of its own, so it is served
+/// only where the open API already is: on loopback, with no token.
+pub fn check_dev(bind: &SocketAddr, auth_open: bool) -> Result<(), String> {
+    if !bind.ip().is_loopback() {
+        return Err(format!(
+            "refusing --dev on {bind}: the graph view is for this machine only; bind to 127.0.0.1"
+        ));
+    }
+    if !auth_open {
+        return Err(format!(
+            "refusing --dev with bearer tokens set: the graph view has no authentication; \
+             unset {TOKEN_ENV} and --tokens-file for local development"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +408,15 @@ mod tests {
         assert!(check_bind(&any, true, false, false).is_err());
         assert_eq!(check_bind(&any, true, true, false), Ok(None));
         assert!(check_bind(&any, true, false, true).unwrap().is_some());
+    }
+
+    #[test]
+    fn dev_needs_loopback_and_no_token() {
+        let lo: SocketAddr = "127.0.0.1:7357".parse().unwrap();
+        let any: SocketAddr = "0.0.0.0:7357".parse().unwrap();
+        assert_eq!(check_dev(&lo, true), Ok(()));
+        assert!(check_dev(&lo, false).is_err());
+        assert!(check_dev(&any, true).is_err());
     }
 
     #[test]

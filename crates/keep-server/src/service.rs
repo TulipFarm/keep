@@ -1180,6 +1180,30 @@ impl KeepService {
         Ok(json!({ "scope": scope.label(), "queued": queued, "jobs": jobs }))
     }
 
+    /// The scope's Memory and Knowledge as nodes and edges, for the dev
+    /// graph view. At most `max_facts` facts, newest first.
+    pub async fn graph(
+        &self,
+        scope: Option<&ScopeArg>,
+        max_facts: usize,
+    ) -> Result<crate::graph::Graph, ApiError> {
+        let scope = self.scope(scope)?;
+        let slice = self
+            .knowledge
+            .graph(&scope.corpus(), &scope.access(), max_facts)
+            .await?;
+        let tree = self.tree(&scope).await?;
+        let (record, files) = self.memory.snapshot(&tree).await?;
+        Ok(crate::graph::build(
+            scope.label(),
+            &slice,
+            crate::graph::MemoryTree {
+                categories: &record.categories,
+                files: &files,
+            },
+        ))
+    }
+
     // ------------------------------------------------------------ helpers
 
     /// The call's evidence allowance, cut to what is left of the caller's

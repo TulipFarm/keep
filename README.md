@@ -186,6 +186,9 @@ OpenAI-compatible model for fact extraction and summaries), and supports
 scoped tokens, TLS, per-caller evidence budgets and per-source read
 allowlists. Each [release](#releases) publishes a container image at
 `ghcr.io/tulipfarm/keep`.
+To see what Keep has learned, run `keep serve --dev` and open
+`http://127.0.0.1:7357/dev/graph`: a graph of entities, facts, sources and
+Memory files, grouped into clusters ([Graph view](docs/server.md#graph-view)).
 [docs/server.md](docs/server.md) covers storage, scopes, the tool list,
 security and copy-paste client configuration.
 

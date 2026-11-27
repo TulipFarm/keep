@@ -19,6 +19,7 @@ async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
+keep-core.workspace = true
 keep-knowledge.workspace = true
 keep-ledger.workspace = true
 keep-memory.workspace = true

@@ -1,0 +1,148 @@
+# One Fandom page title per line. Lines starting with # are ignored.
+# People
+Harry Potter
+Hermione Granger
+Ronald Weasley
+Albus Dumbledore
+Tom Riddle
+Severus Snape
+Rubeus Hagrid
+Sirius Black
+Remus Lupin
+Peter Pettigrew
+James Potter I
+Lily J. Potter
+Draco Malfoy
+Lucius Malfoy
+Narcissa Malfoy
+Bellatrix Lestrange
+Neville Longbottom
+Luna Lovegood
+Ginevra Weasley
+Fred Weasley
+George Weasley
+Percy Weasley
+Bill Weasley
+Charles Weasley
+Arthur Weasley
+Molly Weasley
+Minerva McGonagall
+Filius Flitwick
+Pomona Sprout
+Horace Slughorn
+Gilderoy Lockhart
+Quirinus Quirrell
+Dolores Umbridge
+Alastor Moody
+Bartemius Crouch Junior
+Cedric Diggory
+Cho Chang
+Nymphadora Tonks
+Kingsley Shacklebolt
+Fleur Delacour
+Viktor Krum
+Dobby
+Kreacher
+Argus Filch
+Sybill Trelawney
+Gellert Grindelwald
+Aberforth Dumbledore
+Cornelius Fudge
+Rufus Scrimgeour
+Vernon Dursley
+Petunia Dursley
+Dudley Dursley
+Xenophilius Lovegood
+Garrick Ollivander
+Fenrir Greyback
+Igor Karkaroff
+Olympe Maxime
+Rita Skeeter
+Mundungus Fletcher
+Regulus Black
+Gregory Goyle
+Vincent Crabbe
+Lavender Brown
+Seamus Finnigan
+Dean Thomas
+Oliver Wood
+Myrtle Elizabeth Warren
+Nicolas Flamel
+Ariana Dumbledore
+Teddy Lupin
+# Places
+Hogwarts School of Witchcraft and Wizardry
+Gryffindor
+Slytherin
+Ravenclaw
+Hufflepuff
+Hogsmeade
+Diagon Alley
+Knockturn Alley
+Gringotts Wizarding Bank
+British Ministry of Magic
+Azkaban
+The Burrow
+Number 12 Grimmauld Place
+4 Privet Drive
+Godric's Hollow
+Malfoy Manor
+Forbidden Forest
+Shrieking Shack
+Leaky Cauldron
+Chamber of Secrets
+Room of Requirement
+Department of Mysteries
+St Mungo's Hospital for Magical Maladies and Injuries
+Durmstrang Institute
+Beauxbatons Academy of Magic
+Shell Cottage
+Spinner's End
+Platform Nine and Three-Quarters
+# Groups
+Order of the Phoenix
+Death Eaters
+Dumbledore's Army
+Marauders
+Weasley family
+Black family
+Malfoy family
+Hogwarts Board of Governors
+Daily Prophet
+Wizengamot
+# Objects
+Elder Wand
+Resurrection Stone
+Cloak of Invisibility
+Deathly Hallows
+Horcrux
+Philosopher's Stone
+Marauder's Map
+Sword of Gryffindor
+Sorting Hat
+Goblet of Fire
+Time-Turner
+Pensieve
+Tom Riddle's Diary
+Marvolo Gaunt's Ring
+Slytherin's Locket
+Hufflepuff's Cup
+Ravenclaw's Diadem
+Nagini
+Hedwig
+Buckbeak
+Fawkes
+Hogwarts Express
+Firebolt
+Mirror of Erised
+# Events
+First Wizarding War
+Second Wizarding War
+Battle of Hogwarts
+Triwizard Tournament
+Battle of the Department of Mysteries
+Battle of the Astronomy Tower
+Battle of the Seven Potters
+Quidditch World Cup
+Yule Ball
+Break-in of Gringotts Wizarding Bank (1998)

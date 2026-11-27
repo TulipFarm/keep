@@ -13,9 +13,9 @@ use tokio::sync::Mutex;
 use tokio_postgres::{Client, GenericClient, Row, Transaction};
 
 use crate::ledger::{
-    ApplyOutcome, ChangeSet, EntityStat, IndexInputs, IngestBatch, IngestReport, KnowledgeError,
-    Ledger, MAX_JOB_ATTEMPTS, Projection, PurgeReport, Result, Revision, SourceStat, StoredVector,
-    normalize_name, retry_delay, revision_plan,
+    ApplyOutcome, ChangeSet, EntityStat, GraphSlice, IndexInputs, IngestBatch, IngestReport,
+    KnowledgeError, Ledger, MAX_JOB_ATTEMPTS, Projection, PurgeReport, Result, Revision,
+    SourceStat, StoredVector, normalize_name, retry_delay, revision_plan,
 };
 use crate::memory_ledger::{LEASE_SECONDS, splice_versions};
 use crate::model::{
@@ -1403,6 +1403,100 @@ impl Ledger for PgLedger {
         .iter()
         .map(|r| r.get(0))
         .collect())
+    }
+
+    async fn graph(&self, corpus: &str, partitions: &[String], limit: usize) -> Result<GraphSlice> {
+        let mut c = self.client().await?;
+        let tx = c
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .read_only(true)
+            .start()
+            .await
+            .map_err(db)?;
+        let sources = tx
+            .query(
+                "SELECT * FROM knowledge_sources
+                 WHERE corpus = $1 AND partition_label = ANY($2) ORDER BY id",
+                &[&corpus, &partitions],
+            )
+            .await
+            .map_err(db)?
+            .iter()
+            .map(source_row)
+            .collect();
+        let mut ids: Vec<String> = tx
+            .query(
+                "SELECT f.id FROM knowledge_facts f
+                 WHERE f.corpus = $1 AND f.partition_label = ANY($2)
+                   AND EXISTS (SELECT 1 FROM knowledge_fact_versions v
+                               WHERE v.corpus = f.corpus AND v.fact_id = f.id AND v.invalidated_at IS NULL)
+                 ORDER BY GREATEST(
+                   (SELECT max(recorded_at) FROM knowledge_fact_versions v WHERE v.corpus = f.corpus AND v.fact_id = f.id),
+                   (SELECT max(recorded_at) FROM knowledge_evidence e WHERE e.corpus = f.corpus AND e.fact_id = f.id)
+                 ) DESC NULLS LAST, f.id
+                 LIMIT $3",
+                &[&corpus, &partitions, &(limit as i64 + 1)],
+            )
+            .await
+            .map_err(db)?
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        let mut facts = load_facts(&tx, corpus, &ids).await?;
+        let order: BTreeMap<&str, usize> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), i))
+            .collect();
+        facts.sort_by_key(|f| order.get(f.id.as_str()).copied());
+        let named: Vec<String> = facts
+            .iter()
+            .flat_map(|f| std::iter::once(f.subject.clone()).chain(f.object_entity.clone()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut aliases: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for r in tx
+            .query(
+                "SELECT DISTINCT entity_id, alias FROM knowledge_entity_aliases
+                 WHERE corpus = $1 AND entity_id = ANY($2)",
+                &[&corpus, &named],
+            )
+            .await
+            .map_err(db)?
+        {
+            aliases.entry(r.get(0)).or_default().insert(r.get(1));
+        }
+        let entities = tx
+            .query(
+                "SELECT * FROM knowledge_entities WHERE corpus = $1 AND id = ANY($2) ORDER BY id",
+                &[&corpus, &named],
+            )
+            .await
+            .map_err(db)?
+            .iter()
+            .map(|r| {
+                let id: String = r.get("id");
+                Entity {
+                    corpus: r.get("corpus"),
+                    partition: r.get("partition_label"),
+                    name: r.get("name"),
+                    kind: r.get("kind"),
+                    aliases: aliases.remove(&id).unwrap_or_default(),
+                    id,
+                }
+            })
+            .collect();
+        tx.commit().await.map_err(db)?;
+        Ok(GraphSlice {
+            sources,
+            facts,
+            entities,
+            truncated,
+        })
     }
 
     async fn cached_index(&self, corpus: &str, partition: &str) -> Result<Option<(i64, String)>> {

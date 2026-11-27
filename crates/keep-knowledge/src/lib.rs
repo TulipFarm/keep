@@ -43,7 +43,7 @@ pub use engine::{
     SystemClock, validate_metadata,
 };
 pub use index::{IndexRequest, IndexView};
-pub use ledger::{KnowledgeError, Ledger};
+pub use ledger::{GraphSlice, KnowledgeError, Ledger};
 pub use memory_ledger::MemoryLedger;
 pub use model::{Access, ItemRef, SourceKind};
 pub use pg_ledger::PgLedger;

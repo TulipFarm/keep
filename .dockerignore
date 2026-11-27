@@ -5,3 +5,4 @@ results/
 .keep-cache/
 .git/
 .env
+**/node_modules/

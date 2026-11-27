@@ -59,3 +59,42 @@ at commit `9e0b455f4ef0e2ab8f2e582289761153549043fc`
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
+
+## Graph view (Sigma.js, graphology)
+
+File: `crates/keep-server/dev-ui/dist/graph.js`, compiled into the `keep`
+binary and served by `keep serve --dev`.
+
+The bundle includes these npm packages, all under the MIT License:
+
+| Package | Version | Copyright |
+| --- | --- | --- |
+| `sigma` | 3.0.3 | Copyright (C) 2013-2025, Alexis Jacomy, Guillaume Plique, Benoît Simard |
+| `graphology` | 0.26.0 | Copyright (c) 2016-2021 Guillaume Plique (Yomguithereal) |
+| `graphology-communities-louvain` | 2.0.2 | Copyright (c) 2017-2021 Guillaume Plique (Yomguithereal) |
+| `graphology-layout-forceatlas2` | 0.10.1 | Copyright (c) 2016-2021 Guillaume Plique (Yomguithereal) |
+| `graphology-utils` | 2.5.2 | Copyright (c) 2017-2021 Guillaume Plique (Yomguithereal) |
+| `graphology-indices` | 0.17.1 | Copyright (c) 2020-2021 Guillaume Plique (Yomguithereal) |
+| `mnemonist` | 0.39.8 | Copyright (c) 2016 Guillaume Plique (Yomguithereal) |
+| `obliterator` | 2.0.5 | Copyright (c) 2017-2021 Guillaume Plique (Yomguithereal) |
+| `pandemonium` | 2.4.1 | Copyright (c) 2017-2020 Guillaume Plique (Yomguithereal) |
+| `events` | 3.3.0 | Copyright Joyent, Inc. and other Node contributors |
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

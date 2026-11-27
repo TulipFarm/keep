@@ -9,9 +9,9 @@ use async_trait::async_trait;
 use keep_store::{Bm25Index, Bm25Params, LexicalIndex, ScoredId};
 
 use crate::ledger::{
-    ApplyOutcome, ChangeSet, EntityStat, IndexInputs, IngestBatch, IngestReport, KnowledgeError,
-    Ledger, MAX_JOB_ATTEMPTS, Projection, PurgeReport, Result, Revision, SourceStat, StoredVector,
-    normalize_name, retry_delay, revision_plan,
+    ApplyOutcome, ChangeSet, EntityStat, GraphSlice, IndexInputs, IngestBatch, IngestReport,
+    KnowledgeError, Ledger, MAX_JOB_ATTEMPTS, Projection, PurgeReport, Result, Revision,
+    SourceStat, StoredVector, normalize_name, retry_delay, revision_plan,
 };
 use crate::model::{
     Chunk, Entity, Episode, ErasureEntry, Evidence, Fact, FactStatus, Job, JobCounts, JobKind,
@@ -951,6 +951,47 @@ impl Ledger for MemoryLedger {
             })
             .map(|x| x.id.clone())
             .collect())
+    }
+
+    async fn graph(&self, corpus: &str, partitions: &[String], limit: usize) -> Result<GraphSlice> {
+        let s = self.lock();
+        let readable = |corpus_of: &str, partition: &str| {
+            corpus_of == corpus && partitions.iter().any(|p| p == partition)
+        };
+        let sources = s
+            .sources
+            .values()
+            .filter(|x| readable(&x.corpus, &x.partition))
+            .cloned()
+            .collect();
+        let mut facts: Vec<Fact> = s
+            .facts
+            .values()
+            .filter(|f| readable(&f.corpus, &f.partition) && f.current().is_some())
+            .cloned()
+            .collect();
+        facts.sort_by(|a, b| {
+            last_recorded(b)
+                .cmp(&last_recorded(a))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let truncated = facts.len() > limit;
+        facts.truncate(limit);
+        let named: BTreeSet<&str> = facts
+            .iter()
+            .flat_map(|f| std::iter::once(f.subject.as_str()).chain(f.object_entity.as_deref()))
+            .collect();
+        let entities = named
+            .into_iter()
+            .filter_map(|id| s.entities.get(&key(corpus, id)))
+            .map(|e| s.entity_with_aliases_from(e, None))
+            .collect();
+        Ok(GraphSlice {
+            sources,
+            facts,
+            entities,
+            truncated,
+        })
     }
 
     async fn cached_index(&self, corpus: &str, partition: &str) -> Result<Option<(i64, String)>> {

@@ -123,6 +123,7 @@ the subcommand.
 | | `KEEP_ONNX_SPIN` | `0` | `1` lets idle ONNX threads spin, which is faster on a dedicated host and burns CPU on a shared one |
 | `--ingest-job-budget-ms` | `KEEP_INGEST_JOB_BUDGET_MS` | 5000 | Time an ingest spends on its own source's jobs before it answers; `0` leaves them all to the worker |
 | `--job-pause-ms` | `KEEP_JOB_PAUSE_MS` | 200 | Pause between the background worker's job batches |
+| `serve --dev` | `KEEP_DEV` | off | Serve the [graph view](#graph-view) at `/dev/graph`; loopback and no token only |
 | `--data-dir` | `KEEP_DATA_DIR` | platform data dir | Receipt key and model cache; see [Receipts](#receipts-and-the-data-directory) |
 | | `KEEP_MODEL_CACHE` | `<data-dir>/models` | Where the local model is downloaded; `/opt/keep/models` (baked in) in the image |
 | `--evidence-budget-tokens` | `KEEP_EVIDENCE_BUDGET_TOKENS` | off | Evidence each caller may draw per window; see [Evidence budget](#evidence-budget) |
@@ -232,6 +233,23 @@ in `KEEP_MODEL_DEPLOYMENT`, or `azure-deployments` with
 `KEEP_MODEL_API_VERSION` as well. Keys go in an `api-key` header for the
 Azure styles unless `KEEP_MODEL_AUTH_HEADER` says otherwise.
 
+To use your GitHub Copilot subscription instead, set
+`KEEP_MODEL_API_STYLE=copilot-cli`. Keep then runs the signed-in `copilot`
+CLI (or `KEEP_COPILOT_BIN`) once per call, with no tools and an empty
+working directory. It needs no endpoint or key, but it needs a cap on AI
+credits:
+
+```sh
+export KEEP_MODEL_API_STYLE=copilot-cli
+export KEEP_MODEL_NAME=gpt-5.6-luna
+export KEEP_MODEL_BUDGET_CREDITS=100
+export KEEP_MODEL_TIMEOUT_SECS=180
+```
+
+The CLI adds its own hidden system prompt and does not pin the upstream
+model, so use it for development and demos, not for benchmark claims.
+`GET /v1/health` reports the credits spent so far.
+
 - Extraction runs in the job queue: each episode is read on its own, cut at
   whitespace into turns of at most 4,000 characters and calls of at most 8
   turns, and every fact cites the episode it came from. There is no
@@ -243,9 +261,10 @@ Azure styles unless `KEEP_MODEL_AUTH_HEADER` says otherwise.
   a malformed reply, a configuration error or an exhausted budget fails the
   job after its attempts (`failed`). The ingested text stays searchable
   either way.
-- `KEEP_MODEL_BUDGET_*` caps the calls and tokens one process may use; past
-  a cap every call fails with `budget exhausted` until restart. Nothing
-  converts tokens to money, so set the caps from your price.
+- `KEEP_MODEL_BUDGET_*` caps the calls and tokens one process may use, and
+  `KEEP_MODEL_BUDGET_CREDITS` the Copilot AI credits; past a cap every call
+  fails with `budget exhausted` until restart. Nothing converts tokens to
+  money, so set the caps from your price.
 - Bad configuration, such as an endpoint without a model name, both key
   variables, or a zero budget, stops the server at start-up.
 - `GET /v1/health` reports the model name, endpoint host and style, and the
@@ -287,6 +306,55 @@ local process for `keep mcp`, has one budget. With `session`, each
 `keep mcp --server` process has its own, keyed by the `x-keep-session`
 header it sends. Budgets live in the server's memory and reset when it
 restarts.
+
+### Graph view
+
+`keep serve --dev` adds a page that draws what Keep knows as a graph:
+
+```sh
+keep --project my-app serve --dev
+# keep: graph view on http://127.0.0.1:7357/dev/graph
+```
+
+```
+  collection ── source ◀──evidence── entity ──fact / names──▶ entity
+                                      ▲    ▲
+                                  cites    mentions
+                                      └── Memory file
+```
+
+- Dots are Knowledge collections, sources, entities and categories, and
+  Memory files. Lines are facts between two entities, evidence (an entity
+  to the source that says it), and the links a Memory file has to entities:
+  `cites` when an entry cites one of its facts, `mentions` when the text
+  names it.
+- When a fact's value is text that names another entity, such as
+  "companion: Harry Potter", a `names` line joins the two. Extraction from
+  documents keeps most values as text, so these lines carry most of a
+  document graph's structure.
+- Entities are grouped into clusters (Louvain) and laid out with
+  ForceAtlas2. Click a cluster to zoom in, or a dot to see its facts and
+  where they came from. Keys: `/` find, `Esc` clear, `Backspace` back.
+- Query parameters pick what to draw: `?user=&project=` for another scope,
+  and `?max_facts=` (default 5000, at most 50000) for how many of the
+  newest facts to include. The page says when it cut facts.
+- `/dev/graph.json` returns the same data as JSON.
+
+The page has no authentication of its own, so `--dev` refuses to start on a
+non-loopback address or with bearer tokens set. Its routes also check the
+`Host` and `Origin` headers like the open API does. Use it on your own
+machine only.
+
+The page is compiled into the binary from `crates/keep-server/dev-ui`
+(TypeScript, [Sigma.js](https://www.sigmajs.org) and
+[graphology](https://graphology.github.io)). After you change it, rebuild the
+bundle and commit `dist/graph.js` with your change:
+
+```sh
+cd crates/keep-server/dev-ui
+pnpm install
+pnpm check && pnpm build
+```
 
 ## Scopes
 
@@ -513,6 +581,8 @@ MCP the tool result has `isError: true` and the same object as
   header, or whose `Host` is not `localhost` or a loopback address. A web
   page, including one reached through DNS rebinding, can neither write
   nor read memory.
+- `--dev` serves the [graph view](#graph-view) only on loopback with no
+  token, because the page has no authentication of its own.
 - Request bodies are capped by `--max-body-bytes`.
 - The server logs only the tool name, outcome and duration to stderr. It never
   logs Memory or Knowledge contents. In MCP mode stdout carries only the
