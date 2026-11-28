@@ -9,18 +9,18 @@ export type Agent = keyof typeof inks;
 export type Fact = { key: string; text: string; from: string; to: string | null; by: Agent };
 
 export const keys: Record<string, string> = {
-  deploy: "deploy target",
-  tests: "test command",
-  node: "billing runtime",
+  pricing: "Pro plan price",
+  docs: "Project docs",
+  node: "Node version",
 };
 
 export const timeline: Fact[] = [
-  { key: "deploy", text: "Deploy target is Heroku", from: "2026-01-20", to: "2026-06-03", by: "claude" },
-  { key: "deploy", text: "Deploy target is Fly.io", from: "2026-06-03", to: null, by: "claude" },
-  { key: "tests", text: "Run tests with npm test", from: "2026-03-02", to: "2026-09-14", by: "codex" },
-  { key: "tests", text: "Run tests with pnpm vitest run", from: "2026-09-14", to: null, by: "copilot" },
-  { key: "node", text: "Billing API uses Node 18", from: "2026-02-11", to: "2026-10-08", by: "codex" },
-  { key: "node", text: "Billing API uses Node 22", from: "2026-10-08", to: null, by: "claude" },
+  { key: "pricing", text: "Pro plan is $29/mo", from: "2026-01-20", to: "2026-06-03", by: "claude" },
+  { key: "pricing", text: "Pro plan is $39/mo", from: "2026-06-03", to: null, by: "claude" },
+  { key: "docs", text: "Notes live in Notion", from: "2026-03-02", to: "2026-09-14", by: "codex" },
+  { key: "docs", text: "Notes in Google Docs", from: "2026-09-14", to: null, by: "copilot" },
+  { key: "node", text: "Uses Node 22", from: "2026-02-11", to: "2026-10-08", by: "codex" },
+  { key: "node", text: "Uses Node 26", from: "2026-10-08", to: null, by: "claude" },
 ];
 
 export const revAgents: Agent[] = ["codex", "copilot", "claude"];

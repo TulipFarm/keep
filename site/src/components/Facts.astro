@@ -3,7 +3,7 @@ import { facts } from "../data/site";
 const { count = 3 } = Astro.props;
 ---
 
-<div class="facts" style="display:grid;gap:18px">
+<div class="facts" style="display:grid;gap:10px">
   {facts.slice(0, count).map((f) => (
     <div class="card fact">
       <span class="old">{f.old}</span>
@@ -13,5 +13,5 @@ const { count = 3 } = Astro.props;
       <span class="when">{f.nowWhen}</span>
     </div>
   ))}
-  <p class="muted" style="font-size:.8rem">Example facts. An invented project.</p>
+  <p class="muted" style="font-size:.8rem">Sample facts from an example workspace.</p>
 </div>

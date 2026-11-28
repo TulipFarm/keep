@@ -1,10 +1,11 @@
 ---
 import { faq } from "../data/site";
+const { items = faq } = Astro.props as { items?: [string, string][] };
 const code = (s: string) => s.split(/(`[^`]+`)/).map((p) => (p.startsWith("`") ? ["c", p.slice(1, -1)] : ["t", p]));
 ---
 
 <div>
-  {faq.map(([q, a]) => (
+  {items.map(([q, a]) => (
     <details class="faq">
       <summary>{q}</summary>
       <p>{code(a).map(([k, t]) => (k === "c" ? <code>{t}</code> : t))}</p>
