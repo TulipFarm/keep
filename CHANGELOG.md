@@ -3,6 +3,23 @@
 All notable changes to Keep. Versions follow [Semantic Versioning](https://semver.org), and each release is
 published as `ghcr.io/tulipfarm/keep:<version>`.
 
+## [0.2.0](https://github.com/TulipFarm/keep/releases/tag/v0.2.0) - 2026-11-28
+
+### Features
+
+- **install:** Agentic setup, auto-ports, background service, uninstall and landing page ([#16](https://github.com/TulipFarm/keep/pull/16))
+- **install:** Add agentic uninstall.md prompt and link from site ([#17](https://github.com/TulipFarm/keep/pull/17))
+- **site:** Redesign landing page with interactive timeline and animated diagrams ([#19](https://github.com/TulipFarm/keep/pull/19))
+- **knowledge:** Forget many sources in one pass ([#20](https://github.com/TulipFarm/keep/pull/20))
+
+### Performance
+
+- **knowledge:** Prune finished jobs and index unfinished ones ([#18](https://github.com/TulipFarm/keep/pull/18))
+
+### Documentation
+
+- **site:** Align landing page copy with model extraction, releases, and batch forgetting ([#21](https://github.com/TulipFarm/keep/pull/21))
+
 ## [0.1.1](https://github.com/TulipFarm/keep/releases/tag/v0.1.1) - 2026-11-26
 
 ### Performance
