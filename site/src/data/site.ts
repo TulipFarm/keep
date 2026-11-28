@@ -10,32 +10,33 @@ export const docs = {
 export const meta = {
   title: "Keep by TulipFarm: open-source memory for AI agents",
   description:
-    "Keep is open-source memory and knowledge for AI agents, over MCP. Old facts are marked, not erased. Apache-2.0 research preview. Runs on your machine.",
+    "Keep is open-source memory for your AI assistants. When something changes, the old version is kept and marked as replaced, so you can see what was true, when, and where it came from. Runs on your machine. Apache-2.0 research preview.",
 };
 
 export const setupPrompt = "Read https://keep.tulipfarm.ai/install.md and install Keep for me.";
 
 export const install = {
   heading: "Install in one step",
-  lead: "Paste one prompt into your AI assistant. It sets up Keep locally or remotely, connects your apps, imports existing memories, and runs in the background. macOS and Linux.",
-  agent: { title: "Ask your agent", cmd: setupPrompt, note: "Paste this into Claude Code, Codex, Copilot CLI or OpenCode. Your agent handles setup in plain English, connects your apps, and imports existing memories." },
-  script: { title: "Or run the script", cmd: "curl -fsSL https://keep.tulipfarm.ai/install.sh | sh", note: "Picks free ports automatically, installs a background service (launchd / systemd), and adds ~/.keep/inspect.sh to view your memory graph." },
+  lead: "Paste one sentence into an AI coding assistant, or run the install script. Works on macOS and Linux.",
+  agent: { title: "Ask your agent", cmd: setupPrompt, note: "Paste into Claude Code, Codex, Copilot CLI, or OpenCode. It installs Keep and connects your apps." },
+  script: { title: "Or run the script", cmd: "curl -fsSL https://keep.tulipfarm.ai/install.sh | sh", note: "Picks free ports, installs a background service (launchd / systemd), and adds ~/.keep/inspect.sh." },
   links: [["Read install.md", "/install.md"], ["View install.sh", "/install.sh"], ["Read uninstall.md", "/uninstall.md"], ["View uninstall.sh", "/uninstall.sh"]] as [string, string][],
   copy: "Copy",
   copied: "Copied",
 };
 
 export const hero = {
-  badge: "Open source · Apache-2.0 · Research preview",
-  headline: "Memory your agents can't quietly rewrite.",
-  sub: "Keep is open-source memory and knowledge for AI agents. Keep gives Claude Code, Claude Desktop, Codex, Copilot CLI and OpenCode one shared memory. Every change is a revision. When a fact changes, the old one is marked superseded, not deleted.",
+  badge: "Open source · Local-first · Research preview",
+  headline: "Memory your AI can't quietly rewrite.",
+  sub: "One shared memory for all your AI assistants. Old facts are marked replaced, never erased — with dates and sources intact.",
+  hint: "Paste the prompt into Claude Code, Codex, or Copilot CLI to install Keep.",
   note: "Keep is a research preview. It works, but it is early.",
   primary: "Get Keep on GitHub",
-  secondary: "Read the setup docs",
+  secondary: "Setup docs",
   copy: "Copy setup prompt",
-  worksWith: ["Claude Code", "Claude Desktop", "Codex", "Copilot CLI", "OpenCode", "Cursor", "Any MCP client"],
+  worksWith: ["Claude Code", "Claude Desktop", "Codex", "Copilot CLI", "OpenCode", "Cursor", "Local MCP apps"],
   storesIn: ["In memory", "Postgres + pgvector", "Postgres + Qdrant"],
-  snippetLabel: "Install from source, then connect any MCP agent",
+  snippetLabel: "Install from source, then connect a local MCP agent",
   snippet: [
     "cargo install --path crates/keep-server --features local-embeddings",
     "keep --user me serve &",
@@ -44,38 +45,39 @@ export const hero = {
 };
 
 export const flow = {
-  caption: "What goes in, what Keep stores, what it derives, what your agent gets.",
+  caption: "Your AI tools share one local vault: versioned notes on top, timestamped facts below.",
   steps: [
-    ["What goes in", "Your notes, documents and conversations."],
-    ["What Keep stores", "Memory files as revisions. Episodes that are never edited."],
-    ["What Keep derives", "Facts, each linked to the exact text behind it."],
-    ["What your agent gets", "Memory at session start. Cited search on demand."],
+    ["Work like you already do", "Write notes and chat with your AI as usual."],
+    ["Keep saves every version", "Every edit becomes a new revision."],
+    ["Keep extracts the facts", "Each fact keeps its dates and exact source."],
+    ["Your AI starts informed", "Every new chat loads your notes and searches history."],
   ] as [string, string][],
 };
 
 export const does: [string, string][] = [
-  ["Remembers what you decided.", "Short Markdown files your agent reads at the start of every session."],
-  ["Tracks what changed.", "When a fact changes, the old one is closed, not deleted."],
-  ["Shows where it came from.", "Every fact links to the text that supports it."],
+  ["Stop repeating yourself.", "Your rules and preferences load at the start of every chat."],
+  ["No silent rewrites.", "Changed facts are marked replaced — never quietly erased."],
+  ["Receipts for every answer.", "Every fact links back to the note or chat behind it."],
 ];
 
 export const where = {
-  heading: "Where it runs",
-  lead: "On your machine. Keep calls no hosted service.",
+  heading: "Runs where you want",
+  lead: "On your laptop or your own server. No hosted service.",
   items: [
-    ["On your laptop", "Memory stays in the server's process. Nothing else to install.", "keep --user me serve &"],
-    ["With your own Postgres", "Memory survives restarts. Use pgvector, or add Qdrant.", "docker compose --profile postgres-vector up -d"],
-    ["In Docker Compose", "Run Keep itself in Compose, with generated secrets.", "deploy/compose.yaml"],
+    ["In memory", "Zero setup. Memory clears on restart.", "keep --user me serve &"],
+    ["With Postgres", "Survives restarts. Uses pgvector or Qdrant.", "docker compose --profile postgres-vector up -d"],
+    ["Docker Compose", "Full stack with generated secrets.", "deploy/compose.yaml"],
   ] as [string, string, string][],
   link: ["Run with Docker Compose", `${repo}/blob/main/docs/server.md#run-with-docker-compose`] as [string, string],
 };
 
 export const demo = {
-  heading: "Pick a date. See what was true.",
-  steps: ["Pick a date", "See what was true", "See what changed"],
+  heading: "Drag the date. See what was true.",
+  lead: "Pick a topic and slide through time to see how Keep separates what's true today from what changed.",
+  steps: ["Pick a topic", "Drag the date", "See what was true"],
   legend: ["True on this date", "Replaced later. Still stored.", "Not recorded yet"],
   label: "Example data",
-  caption: "Sample data from an example project.",
+  caption: "Sample data from an example workspace.",
   empty: "Nothing was recorded for this date. Pick a later date.",
 };
 
@@ -94,15 +96,14 @@ export const sections: Section[] = [
   {
     id: "memory",
     n: 1,
-    eyebrow: "Memory files",
-    title: "Memory files",
-    lead: "Short Markdown files your agent reads at the start of every session.",
+    eyebrow: "Memory",
+    title: "Notes your AI reads every time",
+    lead: "Plain Markdown notes loaded at the start of every chat.",
     body: "",
     points: [
-      ["Plain Markdown.", "Saved byte for byte."],
-      ["Safe edits.", "A stale write fails with a conflict."],
-      ["Undo is a new revision.", "It never rewrites history."],
-      ["Revisions kept.", "Up to 100 per file, for 30 days."],
+      ["No accidental overwrites.", "Outdated edits are rejected automatically."],
+      ["Safe undo.", "Undoing creates a new version — history stays intact."],
+      ["30-day history.", "Up to 100 revisions per file, saved byte for byte."],
     ],
     link: ["How Memory works", docs.memory],
   },
@@ -110,14 +111,13 @@ export const sections: Section[] = [
     id: "knowledge",
     n: 2,
     eyebrow: "Knowledge",
-    title: "Knowledge",
-    lead: "A record of what happened, and the facts drawn from it.",
+    title: "Temporal facts with sources",
+    lead: "Every fact tracks when it was true and where it came from.",
     body: "",
     points: [
-      ["Episodes are never edited.", ""],
-      ["Sources.", "Each fact links to the exact text behind it."],
-      ["Two kinds of time.", "Ask what was true on a date, or what Keep knew."],
-      ["Disputes stay visible.", "If order is unclear, Keep keeps both."],
+      ["Append-only.", "Old facts are closed, never erased."],
+      ["Two kinds of time.", "Ask what was true then, or what Keep knew then."],
+      ["Conflicts stay visible.", "If facts disagree, Keep shows both."],
     ],
     link: ["How Knowledge works", docs.knowledge],
   },
@@ -125,29 +125,25 @@ export const sections: Section[] = [
     id: "connect",
     n: 3,
     eyebrow: "Connect",
-    title: "One memory, every agent",
-    lead: "Agents on the same project share the same memory.",
+    title: "One local hub for every AI",
+    lead: "Switch between Claude, Codex, Copilot, or Cursor with one shared memory.",
     body: "",
     points: [
-      ["MCP over stdio", "for coding agents."],
-      ["HTTP", "for scripts and dashboards."],
-      ["Local.", "Listens on 127.0.0.1 by default."],
-      ["Scoped tokens", "limit what each agent can reach."],
+      ["Local MCP + HTTP.", "Works with any local MCP app, plus HTTP for scripts."],
+      ["Scoped keys.", "One key per tool, private to 127.0.0.1 by default."],
     ],
-    link: ["Copy-paste setup for each agent", docs.server],
+    link: ["Setup for each agent", docs.server],
   },
   {
     id: "status",
     n: 4,
     eyebrow: "Status",
-    title: "Status",
-    lead: "Keep is a research preview. We have not yet shown it beats simple baselines.",
+    title: "Honest status",
+    lead: "Research preview. Not yet shown to beat simpler approaches.",
     body: "",
     points: [
-      ["Runs today:", "Memory, Knowledge and the server."],
-      ["Alpha.", "The server is an alpha."],
-      ["No benchmark result", "is published yet."],
-      ["Not passed.", "Our development runs have not passed the gate. We quote no numbers."],
+      ["Works today:", "Memory, Knowledge, and the alpha server."],
+      ["No numbers yet.", "Our test runs haven't passed our own bar."],
     ],
     link: ["Read the methodology", docs.method],
   },
@@ -156,12 +152,10 @@ export const sections: Section[] = [
     n: 5,
     eyebrow: "Open source",
     title: "Open source, Apache-2.0",
-    lead: "Read the code, run the benchmark, check our work.",
+    lead: "Written in Rust. One public repo for server, memory, knowledge, and benchmarks.",
     body: "",
     points: [
-      ["Written in Rust.", ""],
-      ["One public repository", "holds Memory, Knowledge, the server and the benchmark."],
-      ["Datasets keep their own licences.", "You download them yourself."],
+      ["Audit everything.", "Datasets keep their own licences; you download them yourself."],
     ],
     link: ["View the repository", repo],
   },
@@ -170,7 +164,15 @@ export const sections: Section[] = [
 export const faq: [string, string][] = [
   [
     "What is Keep?",
-    "Keep is an open-source memory and knowledge system for AI agents, written in Rust. It stores Memory files and a record of facts, and serves them to coding agents over MCP. It is a research preview.",
+    "Keep is a shared memory for your AI assistants. It stores short notes your AI reads in every chat, plus a record of facts with their sources and dates, so you can see what changed and when. It is open source, written in Rust, connects to AI apps over MCP, and is a research preview.",
+  ],
+  [
+    "Do I need to be a developer to use Keep?",
+    "Not to use it, but setup happens on the command line today. The easiest way is to paste the setup prompt into an AI coding assistant such as Claude Code and let it install Keep for you. After that, your connected AI apps use Keep on their own.",
+  ],
+  [
+    "What is MCP?",
+    "MCP (Model Context Protocol) is an open standard that lets AI apps such as Claude, Codex and Cursor connect to tools and data. Keep is one of those tools, so any MCP app that can run a local server on your computer can use it.",
   ],
   [
     "How is Keep different from RAG or a vector database?",
@@ -203,17 +205,22 @@ export const faq: [string, string][] = [
   ],
 ];
 
+export const inside = {
+  heading: "What's inside",
+  lead: "Two kinds of memory, one local server, and an honest look at where things stand.",
+};
+
 export const footer = "Keep is open source under Apache-2.0 and is a research preview from TulipFarm.";
 
 export const facts = [
-  { old: "Run tests with npm test", oldWhen: "2026-03-02 → 2026-09-14", now: "Run tests with pnpm vitest run", nowWhen: "2026-09-14 → now" },
-  { old: "Deploy target is Heroku", oldWhen: "2026-01-20 → 2026-06-03", now: "Deploy target is Fly.io", nowWhen: "2026-06-03 → now" },
-  { old: "Billing API uses Node 18", oldWhen: "2026-02-11 → 2026-10-08", now: "Billing API uses Node 22", nowWhen: "2026-10-08 → now" },
+  { old: "Pro plan is $29/mo", oldWhen: "2026-01-20 → 2026-06-03", now: "Pro plan is $39/mo", nowWhen: "2026-06-03 → now" },
+  { old: "Notes live in Notion", oldWhen: "2026-03-02 → 2026-09-14", now: "Notes in Google Docs", nowWhen: "2026-09-14 → now" },
+  { old: "Uses Node 22", oldWhen: "2026-02-11 → 2026-10-08", now: "Uses Node 26", nowWhen: "2026-10-08 → now" },
 ];
 
 export type Line = ["", string] | ["add", string] | ["del", string];
 export const revisions: Line[][] = [
-  [["", "# my-app"], ["", "- Run tests with npm test"], ["", "- Deploy target is Heroku"]],
-  [["", "# my-app"], ["del", "- Run tests with npm test"], ["add", "- Run tests with pnpm vitest run"], ["", "- Deploy target is Heroku"]],
-  [["", "# my-app"], ["", "- Run tests with pnpm vitest run"], ["del", "- Deploy target is Heroku"], ["add", "- Deploy target is Fly.io"], ["add", "- Never commit .env files"]],
+  [["", "# project-notes"], ["", "- Write replies in short, plain English"], ["", "- Pro plan is $29/mo"], ["", "- Uses Node 22"]],
+  [["", "# project-notes"], ["", "- Write replies in short, plain English"], ["", "- Pro plan is $29/mo"], ["del", "- Uses Node 22"], ["add", "- Uses Node 26"]],
+  [["", "# project-notes"], ["", "- Write replies in short, plain English"], ["del", "- Pro plan is $29/mo"], ["add", "- Pro plan is $39/mo"], ["", "- Uses Node 26"], ["add", "- Never share customer emails"]],
 ];

@@ -1,0 +1,25 @@
+---
+const { text, label = "Copy", aria, fallback = "Copy failed. Select the text instead.", class: cls = "" } = Astro.props;
+---
+
+<button type="button" class:list={["copyx", cls]} data-copyx={text} data-fallback={fallback} aria-label={aria ?? label}>{label}</button>
+
+<script>
+  const live = Object.assign(document.createElement("p"), { role: "status", className: "sr-only" });
+  document.body.append(live);
+  document.querySelectorAll<HTMLButtonElement>("[data-copyx]").forEach((el) => {
+    const label = el.textContent;
+    const flash = (msg: string, ms: number) => {
+      el.textContent = live.textContent = msg;
+      setTimeout(() => (el.textContent = label), ms);
+    };
+    el.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(el.dataset.copyx ?? "");
+        flash("Copied", 1800);
+      } catch {
+        flash(el.dataset.fallback ?? "Copy failed.", 2400);
+      }
+    });
+  });
+</script>

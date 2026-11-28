@@ -1,5 +1,4 @@
 ---
-import "@fontsource-variable/newsreader";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/geist-mono";
 import "../styles/global.css";
@@ -33,7 +32,8 @@ const graph = {
     <meta name="description" content={meta.description} />
     <meta property="og:title" content={meta.title} />
     <meta property="og:description" content={meta.description} />
-    <meta name="theme-color" content="#f6f6f1" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0c0e11" media="(prefers-color-scheme: dark)" />
     {noindex && <meta name="robots" content="noindex" />}
     <link rel="canonical" href={canonical} />
     <meta property="og:type" content="website" />

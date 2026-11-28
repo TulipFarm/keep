@@ -1,340 +1,289 @@
 ---
-import { sh, esc } from "../data/highlight";
 import { logos } from "../data/logos";
-import { hero, sections, repo, docs, flow, does, demo, setupPrompt, where, install } from "../data/site";
-import { timeline, keys, day, span, start, end } from "../data/timeline";
-import Visual from "./Visual.astro";
+import { hero, sections, repo, docs, flow, does, demo, setupPrompt, where, install, faq, inside } from "../data/site";
+import { sh, esc } from "../data/highlight";
+import TimeMachine from "./TimeMachine.astro";
+import Copy from "./Copy.astro";
+import MemoryFile from "./MemoryFile.astro";
+import ArchitectureDiagram from "./ArchitectureDiagram.astro";
+import TemporalDiagram from "./TemporalDiagram.astro";
+import HubDiagram from "./HubDiagram.astro";
 import Faq from "./Faq.astro";
 
-const rows = Object.entries(keys).map(([k, label]) => ({
-  k,
-  label,
-  bars: timeline
-    .filter((f) => f.key === k)
-    .map((f) => {
-      const a = day(f.from), b = f.to ? day(f.to) : span;
-      return { ...f, a, b, left: (a / span) * 100, width: ((b - a) / span) * 100 };
-    }),
-}));
-const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov"];
-const first = day("2026-05-01");
+const s = Object.fromEntries(sections.map((x) => [x.id, x]));
+const half = Math.ceil(faq.length / 2);
 ---
 
-<div class="home">
-  <header class="wrap top">
-    <a class="brand" href="/" aria-label="Keep home">KEEP<span>_</span></a>
-    <nav><a href="#machine">Time machine</a><a href="#install">Install</a><a href="#s-status">Status</a><a href={repo}><i class="lg" aria-hidden="true" set:html={logos.GitHub[0]} />GitHub ↗</a></nav>
-  </header>
+<header class="wrap top">
+  <a class="brand" href="/" aria-label="Keep home"><span class="mark" aria-hidden="true"></span>Keep</a>
+  <nav aria-label="Primary">
+    <a href="#machine">Time machine</a>
+    <a href="#install">Install</a>
+    <a href="#s-status">Status</a>
+    <a class="btn" href={repo}><i class="lg" aria-hidden="true" set:html={logos.GitHub[0]} />GitHub</a>
+  </nav>
+</header>
 
-  <section class="wrap hero">
-    <p class="badge">{hero.badge}</p>
-    <h1>Memory your agents can't <span class="hl">quietly rewrite.</span></h1>
-    <div class="subrow">
-      <p>{hero.sub}</p>
+<section class="wrap hero">
+  <p class="kicker">{hero.badge}</p>
+  <div class="hero-grid">
+    <h1>{hero.headline.replace(/\.$/, "")}<span class="dot">.</span></h1>
+    <div>
+      <p class="sub">{hero.sub}</p>
       <div class="cta">
-        <a class="btn primary" href={repo}><i class="lg" aria-hidden="true" set:html={logos.GitHub[0]} />{hero.primary}</a>
-        <a class="btn" href={docs.server}>{hero.secondary}</a>
-        <button type="button" class="btn" id="copy" aria-label="Copy setup prompt" data-prompt={setupPrompt}>{hero.copy}</button>
-        <p class="note">{hero.note}</p>
-        <p class="badges">
-          <a href={`${repo}/stargazers`}><img alt="GitHub stars" height="20" src="https://img.shields.io/github/stars/TulipFarm/keep?style=flat-square&logo=github" /></a>
-          <a href={`${repo}/actions/workflows/ci.yml`}><img alt="CI status" height="20" src="https://img.shields.io/github/actions/workflow/status/TulipFarm/keep/ci.yml?branch=main&label=CI&style=flat-square" /></a>
-          <img alt="Licence: Apache-2.0" height="20" src="https://img.shields.io/badge/license-Apache--2.0-0a0a0a?style=flat-square" />
-        </p>
+        <Copy text={setupPrompt} label={hero.copy} aria="Copy setup prompt" fallback="Copy failed. The prompt is under Install below." class="btn primary" />
+        <noscript><a class="btn primary" href="#install">See the setup prompt</a><style>.copyx { display: none !important; }</style></noscript>
+        <a class="btn" href={repo}><i class="lg" aria-hidden="true" set:html={logos.GitHub[0]} />{hero.primary}</a>
       </div>
+      <p class="hint">{hero.hint} <a class="link" href={docs.server}>{hero.secondary}</a></p>
     </div>
-  </section>
+  </div>
+</section>
 
-  <section class="wrap ww">
-    <p><b>Works with</b> {hero.worksWith.map((w) => <span class="chip">{(logos[w] ?? []).map((l) => <i class="lg" aria-hidden="true" set:html={l} />)}{w}</span>)}</p>
-    <p><b>Stores in</b> {hero.storesIn.map((w) => <span class="chip">{(logos[w] ?? []).map((l) => <i class="lg" aria-hidden="true" set:html={l} />)}{w}</span>)}</p>
-  </section>
+<section class="wrap machine" id="machine" aria-labelledby="machine-h">
+  <div class="machine-head">
+    <div>
+      <h2 id="machine-h">{demo.heading}</h2>
+      <p>{demo.lead}</p>
+    </div>
+    <ol class="steps">{demo.steps.map((t, i) => <li><span>{i + 1}</span>{t}</li>)}</ol>
+  </div>
+  <div class="panel">
+    <p class="ex">{demo.label}</p>
+    <TimeMachine />
+  </div>
+  <div class="meta">
+    <p>{hero.note}</p>
+    <p class="badges">
+      <a href={`${repo}/stargazers`}><img alt="GitHub stars" width="58" height="20" src="https://img.shields.io/github/stars/TulipFarm/keep?style=flat-square&logo=github" /></a>
+      <a href={`${repo}/actions/workflows/ci.yml`}><img alt="CI status" width="88" height="20" src="https://img.shields.io/github/actions/workflow/status/TulipFarm/keep/ci.yml?branch=main&label=CI&style=flat-square" /></a>
+      <img alt="Licence: Apache-2.0" width="122" height="20" src="https://img.shields.io/badge/license-Apache--2.0-0a0a0a?style=flat-square" />
+    </p>
+  </div>
+</section>
 
-  <section class="wrap" id="machine">
-    <div class="tm" id="tm" style={`--p:${first / span}`}>
-      <div class="tmhead">
-        <h2>{demo.heading}</h2>
-        <p class="exlabel">{demo.label}</p>
-        <ol class="steps">{demo.steps.map((t) => <li>{t}</li>)}</ol>
-      </div>
-      <div class="dial">
-        <span class="lab">DATE</span>
-        <output class="date" id="tm-date">2026-05-01</output>
-      </div>
-      <input type="range" min="0" max={span} value={first} aria-label="Choose a date" />
-      <div class="ans" id="tm-ans" data-st="now">
-        <p class="q" id="tm-q"></p>
-        <p class="a" id="tm-a"></p>
-        <p class="s" id="tm-s"></p>
-      </div>
-      <div class="gantt">
-        <div class="head">
-          <span></span>
-          <div class="months">{months.map((m) => <i>{m}</i>)}</div>
+<section class="wrap ww" aria-label="Compatibility">
+  <div><h2>Works with</h2><ul>{hero.worksWith.map((w) => <li>{(logos[w] ?? []).map((l) => <i class="lg" aria-hidden="true" set:html={l} />)}{w}</li>)}</ul></div>
+  <div><h2>Stores in</h2><ul>{hero.storesIn.map((w) => <li>{(logos[w] ?? []).map((l) => <i class="lg" aria-hidden="true" set:html={l} />)}{w}</li>)}</ul></div>
+</section>
+
+<section class="wrap sec" id="how" aria-labelledby="how-h">
+  <div class="sec-head"><h2 id="how-h">How it works</h2><p>{flow.caption}</p></div>
+  <ArchitectureDiagram />
+  <ul class="does">{does.map(([t, d]) => <li><h3>{t}</h3><p>{d}</p></li>)}</ul>
+</section>
+
+<section class="wrap sec" aria-labelledby="inside-h">
+  <div class="sec-head"><h2 id="inside-h">{inside.heading}</h2><p>{inside.lead}</p></div>
+  <div class="bento">
+    {[s.memory, s.knowledge, s.connect].map((x) => (
+      <article class:list={["tile", `t-${x.id}`]} id={`s-${x.id}`}>
+        <p class="eyebrow">{x.eyebrow}</p>
+        <h3>{x.title}</h3>
+        <p class="lead">{x.lead}</p>
+        <div class="art">
+          {x.id === "memory" && <MemoryFile />}
+          {x.id === "knowledge" && <TemporalDiagram />}
+          {x.id === "connect" && <HubDiagram />}
         </div>
-        {rows.map((r) => (
-          <div class="row" data-key={r.k}>
-            <button type="button" class="rl">{r.label}?</button>
-            <div class="track">
-              {r.bars.map((b) => (
-                <div class="b" data-a={b.a} data-b={b.b} data-state="future" style={`left:${b.left}%;width:${b.width}%`}>
-                  <span>{b.text}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-        <div class="playhead"></div>
-      </div>
-      <ul class="key">
-        <li><i class="k now"></i>{demo.legend[0]}</li>
-        <li><i class="k past"></i>{demo.legend[1]}</li>
-        <li><i class="k future"></i>{demo.legend[2]}</li>
+        <ul class="pts">{x.points.map(([b, t]) => <li><strong>{b}</strong> {t}</li>)}</ul>
+        {x.link && <a class="link" href={x.link[1]}>{x.link[0]}</a>}
+      </article>
+    ))}
+
+    <article class="tile t-where" id="where">
+      <p class="eyebrow">Deploy</p>
+      <h3>{where.heading}</h3>
+      <p class="lead">{where.lead}</p>
+      <ul class="where">
+        {where.items.map(([t, d, c]) => <li><strong>{t}</strong><span>{d}</span><code set:html={sh(c)} /></li>)}
       </ul>
-      <details class="dev"><summary>See the request an agent would send</summary>
-        <pre class="term" id="tm-req" aria-live="polite"></pre>
-        <p class="cap">Example call to <code>knowledge_search</code>. {demo.caption}</p>
-      </details>
-    </div>
-  </section>
+      <a class="link" href={where.link[1]}>{where.link[0]}</a>
+    </article>
 
-  <section class="wrap sec" id="how">
-    <h2>How it works</h2>
-    <p class="lead">{flow.caption}</p>
-    <ol class="flow">
-      {flow.steps.map(([t, d], i) => <li><span class="fn">{i + 1}</span><h3>{t === "In Docker Compose" && <i class="lg" aria-hidden="true" set:html={logos.Docker[0]} />}{t}</h3><p>{d}</p></li>)}
-    </ol>
-    <div class="does">
-      {does.map(([t, d]) => <div><h3>{t}</h3><p>{d}</p></div>)}
-    </div>
-  </section>
+    <article class="tile t-status" id="s-status">
+      <div class="status-head">
+        <p class="eyebrow">{s.status.eyebrow}</p>
+        <span class="flag">Not passed yet</span>
+      </div>
+      <h3>{s.status.lead}</h3>
+      <ul class="pts">{s.status.points.map(([b, t]) => <li><strong>{b}</strong> {t}</li>)}</ul>
+      <dl class="log">
+        <div><dt>Development runs</dt><dd class="bad">Not passed</dd></div>
+        <div><dt>Sealed holdout</dt><dd>Not run</dd></div>
+        <div><dt>Published results</dt><dd>None</dd></div>
+      </dl>
+      <a class="link" href={s.status.link![1]}>{s.status.link![0]}</a>
+    </article>
 
-  <section class="wrap sec" id="install">
-    <h2>{install.heading}</h2>
-    <p class="lead">{install.lead}</p>
-    <div class="does two">
-      {[install.agent, install.script].map((c) => (
-        <div><h3>{c.title}</h3><p>{c.note}</p>
-          <div class="cmdrow"><pre class="term mini"><code set:html={c === install.script ? sh(c.cmd) : esc(c.cmd)} /></pre><button type="button" class="btn cpy" data-copy={c.cmd} aria-label={`Copy: ${c.title}`}>{install.copy}</button></div>
+    <article class="tile t-oss" id="s-open-source">
+      <p class="eyebrow">{s["open-source"].eyebrow}</p>
+      <h3>{s["open-source"].title}</h3>
+      <p class="lead">{s["open-source"].lead}</p>
+      <ul class="pts">{s["open-source"].points.map(([b, t]) => <li><strong>{b}</strong> {t}</li>)}</ul>
+      <div class="oss-cta">
+        <a class="btn primary" href={repo}>Read the source</a>
+        <a class="btn" href={docs.issues}>Report a bug or ask for a feature</a>
+        <a class="btn" href={docs.method}>Read the methodology</a>
+      </div>
+      <a class="link" href={s["open-source"].link![1]}>{s["open-source"].link![0]}</a>
+    </article>
+  </div>
+</section>
+
+<section class="band" id="install" aria-labelledby="install-h">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2 id="install-h">{install.heading}</h2>
+      <p>{install.lead}</p>
+    </div>
+    <div class="band-grid">
+      {[install.agent, install.script].map((c, i) => (
+        <div class="cmdbox">
+          <h3><span aria-hidden="true">{i === 0 ? "A" : "B"}</span>{c.title}</h3>
+          <p>{c.note}</p>
+          <div class="cmd">
+            <pre><code set:html={c === install.script ? sh(c.cmd) : esc(c.cmd)} /></pre>
+            <Copy text={c.cmd} label={install.copy} aria={`Copy: ${c.title}`} class={i === 0 ? "btn primary" : "btn ghost"} />
+          </div>
         </div>
       ))}
     </div>
-    <p>{install.links.map(([t, h], i) => <>{i > 0 && " · "}<a class="lnk" href={h}>{t} →</a></>)}</p>
-  </section>
+    <p class="band-links">{install.links.map(([t, h]) => <a href={h}>{t}</a>)}</p>
+  </div>
+</section>
 
-  <section class="wrap sec" id="where">
-    <h2>{where.heading}</h2>
-    <p class="lead">{where.lead}</p>
-    <div class="does">
-      {where.items.map(([t, d, c]) => <div><h3>{t}</h3><p>{d}</p><pre class="term mini"><code set:html={sh(c)} /></pre></div>)}
-    </div>
-    <p><a class="lnk" href={where.link[1]}>{where.link[0]} →</a></p>
-  </section>
-
-  {sections.map((s) => (
-    <section class="sec" id={`s-${s.id}`}>
-      <div class="wrap g">
-        <div class="txt">
-          <div class="num">{String(s.n).padStart(2, "0")}</div>
-          <h2>{s.title}</h2>
-          <p class="lead">{s.lead}</p>
-          {s.points.length > 0 && <ul>{s.points.map(([b, t]) => <li><strong>{b}</strong> {t}</li>)}</ul>}
-          {s.link && <p><a class="lnk" href={s.link[1]}>{s.link[0]} →</a></p>}
-        </div>
-        <div class="vis"><Visual id={s.id} /></div>
-      </div>
-    </section>
-  ))}
-
-  <section class="sec"><div class="wrap faqw"><h2>Questions</h2><Faq /></div></section>
-</div>
-
-<script>
-  document.querySelectorAll<HTMLElement>("#copy, [data-copy]").forEach((el) => {
-    const label = el.textContent;
-    el.addEventListener("click", async () => {
-      const text = el.dataset.copy ?? el.dataset.prompt ?? "";
-      try { await navigator.clipboard.writeText(text); el.textContent = "Copied"; setTimeout(() => (el.textContent = label), 1800); } catch {}
-    });
-  });
-</script>
-
-<script define:vars={{ timeline, keys, span, start, rowsData: rows.map((r) => r.k) }}>
-  const root = document.getElementById("tm");
-  const range = root.querySelector("input");
-  const dateEl = document.getElementById("tm-date");
-  const req = document.getElementById("tm-req");
-  const day = (s) => Math.round((Date.parse(s) - Date.parse(start)) / 864e5);
-  const iso = (d) => new Date(Date.parse(start) + d * 864e5).toISOString().slice(0, 10);
-  let sel = "deploy";
-  function update() {
-    const d = +range.value, at = iso(d);
-    root.style.setProperty("--p", d / span);
-    dateEl.textContent = at; range.setAttribute("aria-valuetext", at);
-    root.querySelectorAll(".b").forEach((b) => {
-      b.dataset.state = d < +b.dataset.a ? "future" : d >= +b.dataset.b && b.dataset.b != span ? "past" : "now";
-    });
-    root.querySelectorAll(".row").forEach((r) => r.classList.toggle("sel", r.dataset.key === sel));
-    const facts = timeline.filter((f) => f.key === sel);
-    const hit = facts.find((f) => day(f.from) <= d && (!f.to || d < day(f.to)));
-    const cur = facts.find((f) => !f.to);
-    let out = `POST /v1/knowledge/search\n{ "query": "${keys[sel]}", "valid_at": "${at}" }\n\n`;
-    if (!hit) out += `200  nothing recorded for this date.`;
-    else {
-      out += `200  ${hit.text}\n     valid ${hit.from} → ${hit.to ?? "now"}`;
-      if (hit.to) out += `\n     SUPERSEDED on ${hit.to}. Still stored.\n     today: ${cur.text}`;
-    }
-    req.textContent = out;
-    const st = !hit ? "none" : hit.to ? "past" : "now";
-    document.getElementById("tm-ans").dataset.st = st;
-    document.getElementById("tm-q").textContent = `On ${at}, what was the ${keys[sel]}?`;
-    document.getElementById("tm-a").textContent = hit ? hit.text : "Nothing was recorded for this date. Pick a later date.";
-    document.getElementById("tm-s").textContent = !hit ? "" : hit.to
-      ? `Replaced on ${hit.to}. Today it is: ${cur.text.replace(/^.* (is|uses|with) /, "")}. Keep still stores it.`
-      : "Still true today.";
-  }
-  range.addEventListener("input", update);
-  root.querySelectorAll(".row .rl").forEach((b) => b.addEventListener("click", () => { sel = b.parentElement.dataset.key; update(); }));
-  update();
-</script>
-
-<style is:global>
-  html:root {
-    color-scheme: light;
-    --paper: #f6f6f1; --paper-2: #e9e9e1; --card: #fff; --ink: #0a0a0a; --muted: #3f3f39; --rule: #0a0a0a;
-    --stamp: #e5311d; --stamp-soft: #ffd9d3; --ok: #0a0a0a; --ok-soft: #dcff5a; --term: #0a0a0a; --term-text: #f6f6f1; --term-muted: #9a9a90;
-    --shadow: 6px 6px 0 #0a0a0a;
-  }
-  html .facts { gap: 28px !important; }
-  html .fact { padding: 52px 24px 22px; gap: 8px; }
-  html .fact .old + .stamp { top: 14px; right: 16px; font-size: .68rem; }
-  html .fact .old { font-weight: 600; }
-  html .fact .new { font: 800 1.15rem/1.3 var(--font-body); letter-spacing: -.01em; margin-top: 6px; }
-  html .fact .when { color: #55554d; }
-  html .btn { border-radius: 0; border-width: 2.5px; font-weight: 700; }
-  html .btn.primary { background: #0a0a0a; color: #dcff5a; }
-  html .btn.primary:hover { background: #dcff5a; color: #0a0a0a; border-color: #0a0a0a; }
-  html .card, html .memfile .body { border: 2.5px solid #0a0a0a; border-radius: 0; }
-  html .term { border-radius: 0; }
-  html .memfile .tabs button { border: 2.5px solid #0a0a0a; border-bottom: 0; border-radius: 0; }
-  html h2 { font-family: var(--font-body); font-weight: 800; letter-spacing: -.035em; }
-  html .faq summary { font-family: var(--font-body); font-weight: 700; }
-</style>
+<section class="wrap sec questions" aria-labelledby="faq-h">
+  <h2 id="faq-h">Questions</h2>
+  <div class="faq-grid">
+    <Faq items={faq.slice(0, half)} />
+    <Faq items={faq.slice(half)} />
+  </div>
+</section>
 
 <style>
-  .home { font-family: var(--font-body); }
-  .top { display: flex; justify-content: space-between; align-items: center; padding: 18px 0; border-bottom: 2.5px solid #0a0a0a; }
-  .brand { font: 800 1.5rem var(--font-mono); text-decoration: none; letter-spacing: -.05em; }
-  .brand span { color: var(--stamp); }
-  .top nav a { display: inline-flex; align-items: center; }
-  .top nav { display: flex; gap: 22px; font: 600 .85rem var(--font-mono); text-transform: uppercase; }
-  .top nav a { text-decoration: none; }
-  .top nav a:hover { background: #dcff5a; }
-  .hero { padding: 48px 0 40px; }
-  .badge { font: 700 .8rem var(--font-mono); text-transform: uppercase; letter-spacing: .08em; display: inline-block; border: 2.5px solid #0a0a0a; padding: 4px 10px; margin-bottom: 28px; }
-  h1 { font: 800 clamp(2.6rem, 7.6vw, 6.4rem)/.98 var(--font-body); letter-spacing: -.05em; text-transform: uppercase; }
-  h1 { isolation: isolate; }
-  .hl { background: #dcff5a; position: relative; z-index: -1; }
-  .subrow { display: grid; grid-template-columns: 1.3fr 1fr; gap: 40px; margin-top: 36px; align-items: end; font-size: 1.2rem; font-weight: 500; }
-  .cta { display: flex; flex-wrap: wrap; gap: 12px; }
-  .note { font: .8rem var(--font-mono); width: 100%; }
+  .lg { display: inline-flex; margin-right: 6px; }
+  .lg :global(svg) { width: 1em; height: 1em; }
 
-  .ww { display: grid; gap: 10px; padding: 28px 0 8px; font-size: .95rem; }
-  .ww p { margin: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .ww b { font: 700 .8rem var(--font-mono); text-transform: uppercase; margin-right: 8px; min-width: 7.5em; }
-  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
-  .badges img { display: block; }
-  .exlabel { font: 700 .72rem var(--font-mono); text-transform: uppercase; letter-spacing: .08em; background: #dcff5a; justify-self: start; padding: 2px 8px; margin: 0; }
-  .lg { display: inline-flex; font-size: 1.05em; margin-right: 7px; vertical-align: -.14em; }
-  .lg :global(svg) { width: 1.1em; height: 1.1em; }
-  .btn { display: inline-flex; align-items: center; }
-  .chip { display: inline-flex; align-items: center; border: 2px solid #0a0a0a; padding: 3px 10px; font: 600 .85rem var(--font-mono); background: #fff; }
-  #how, #where, #install { display: grid; gap: 24px; }
-  .mini :global(.t-cmd) { color: #7ee787; font-weight: 700; }
-  .mini :global(.t-flag) { color: #79c0ff; }
-  .mini :global(.t-op) { color: #ff7b72; }
-  .mini :global(.t-str) { color: #ffa657; }
-  .mini :global(.t-arg) { color: #e6edf3; }
-  .cmdrow { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: stretch; margin-top: 12px; }
-  .cmdrow .mini { margin: 0; display: flex; align-items: center; white-space: pre-wrap; word-break: break-all; }
-  .cpy { padding: 0 14px; font-size: .85rem; }
-  .mini { margin-top: 12px; font-size: .78rem; overflow-x: auto; }
-  .flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; }
-  .flow li { position: relative; border: 2.5px solid #0a0a0a; background: #fff; padding: 16px; display: grid; gap: 6px; align-content: start; }
-  .flow li:not(:last-child)::after { content: "→"; position: absolute; right: -26px; top: 50%; transform: translateY(-50%); font: 800 1.4rem var(--font-mono); }
-  h3 { font-family: var(--font-body); font-weight: 800; letter-spacing: -.02em; }
-  .flow h3 { margin: 0; font-size: 1.05rem; }
-  .flow p { margin: 0; color: var(--muted); font-size: .95rem; }
-  .fn { font: 800 .85rem var(--font-mono); background: #0a0a0a; color: #dcff5a; width: 1.8em; text-align: center; }
-  .does { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
-  .does > div { border-top: 4px solid #0a0a0a; padding-top: 12px; }
-  .does.two { grid-template-columns: repeat(2, 1fr); }
-  .does h3 { margin: 0 0 6px; font-size: 1.15rem; }
-  .does p { margin: 0; color: var(--muted); }
-  .tmhead h2 { font-size: clamp(1.6rem, 3.6vw, 2.6rem); }
-  .steps { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 12px 0 0; padding: 0; list-style: none; counter-reset: s; font-weight: 600; }
-  .steps li { counter-increment: s; }
-  .steps li::before { content: counter(s); display: inline-grid; place-items: center; width: 1.6em; height: 1.6em; margin-right: 8px; background: #0a0a0a; color: #dcff5a; font: 800 .85rem var(--font-mono); }
-  .ans { border: 2.5px solid #0a0a0a; padding: 16px 20px; display: grid; gap: 6px; }
-  .ans[data-st="now"] { background: #dcff5a; }
-  .ans[data-st="past"] { background: #ffd9d3; }
-  .ans[data-st="none"] { background: #eee; }
-  .ans p { margin: 0; }
-  .ans .q { font: 600 .9rem var(--font-mono); }
-  .ans .a { font: 800 clamp(1.5rem, 3.6vw, 2.4rem)/1.1 var(--font-body); letter-spacing: -.03em; }
-  .ans .s { font-weight: 600; }
-  .key { display: flex; flex-wrap: wrap; gap: 8px 24px; list-style: none; margin: 0; padding: 0; font: 600 .8rem var(--font-mono); }
-  .k { display: inline-block; width: 22px; height: 12px; margin-right: 8px; border: 2px solid #0a0a0a; vertical-align: -1px; }
-  .k.now { background: #0a0a0a; }
-  .k.past { background: repeating-linear-gradient(135deg, #fff 0 3px, #e5311d66 3px 4px); }
-  .k.future { border-style: dashed; }
-  .dev summary { cursor: pointer; font: 600 .8rem var(--font-mono); }
-  .dev pre { margin-top: 10px; }
-  .tm { border: 2.5px solid #0a0a0a; background: #fff; box-shadow: 10px 10px 0 #0a0a0a; padding: 24px; display: grid; gap: 20px; }
-  .dial { display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap; }
-  .lab { font: 800 1rem var(--font-mono); background: #0a0a0a; color: #dcff5a; padding: 2px 8px; }
-  .date { font: 800 clamp(2.4rem, 8vw, 6rem)/1 var(--font-mono); letter-spacing: -.06em; }
-  .hint { font: .8rem var(--font-mono); color: var(--muted); margin-left: auto; }
-  input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 44px; background: transparent; cursor: ew-resize; }
-  input[type="range"]::-webkit-slider-runnable-track { height: 12px; background: #0a0a0a; }
-  input[type="range"]::-moz-range-track { height: 12px; background: #0a0a0a; }
-  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 44px; margin-top: -16px; background: #dcff5a; border: 3px solid #0a0a0a; }
-  input[type="range"]::-moz-range-thumb { width: 22px; height: 38px; border-radius: 0; background: #dcff5a; border: 3px solid #0a0a0a; }
-  .gantt { --lab: 150px; position: relative; display: grid; gap: 10px; }
-  .head, .row { display: grid; grid-template-columns: var(--lab) 1fr; align-items: center; }
-  .months { display: grid; grid-template-columns: repeat(11, 1fr); font: .7rem var(--font-mono); color: var(--muted); }
-  .months i { font-style: normal; border-left: 1px solid #0a0a0a33; padding-left: 4px; }
-  .rl { text-align: left; font: 700 .78rem var(--font-mono); background: #fff; border: 2px solid #0a0a0a; padding: 8px; margin-right: 12px; cursor: pointer; color: inherit; }
-  .row.sel .rl { background: #0a0a0a; color: #dcff5a; }
-  .track { position: relative; height: 44px; background: repeating-linear-gradient(90deg, #0a0a0a14 0 1px, transparent 1px 9.0909%); }
-  .b { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; padding: 0 8px; overflow: hidden; font: 600 .75rem var(--font-mono); white-space: nowrap; border: 2px solid #0a0a0a; transition: background .15s; }
-  .b[data-state="now"] { background: #0a0a0a; color: #dcff5a; }
-  .b[data-state="past"] { background: repeating-linear-gradient(135deg, #fff 0 5px, #e5311d33 5px 6px); text-decoration: line-through; text-decoration-color: #e5311d; text-decoration-thickness: 2px; color: var(--muted); }
-  .b[data-state="future"] { border-style: dashed; color: #0a0a0a77; }
-  .playhead { position: absolute; top: 0; bottom: 0; width: 0; left: calc(var(--lab) + (100% - var(--lab)) * var(--p)); border-left: 3px solid var(--stamp); pointer-events: none; }
-  .playhead::before { content: ""; position: absolute; top: -6px; left: -9px; border: 7px solid transparent; border-top: 10px solid var(--stamp); }
-  .cap { font: .75rem var(--font-mono); color: var(--muted); }
-  #tm-req { min-height: 7.5em; white-space: pre-wrap; }
+  .top { display: flex; justify-content: space-between; align-items: center; height: 72px; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.15rem; text-decoration: none; letter-spacing: -.02em; }
+  .mark { width: 14px; height: 14px; border-radius: 3px; background: var(--accent); box-shadow: 5px 5px 0 -1px var(--fg); }
+  .top nav { display: flex; align-items: center; gap: 28px; font-size: .94rem; }
+  .top nav a:not(.btn) { color: var(--muted); text-decoration: none; }
+  .top nav a:not(.btn):hover { color: var(--fg); }
 
-  .sec { border-top: 2.5px solid #0a0a0a; margin-top: 80px; padding-top: 48px; }
-  .g { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
-  .num { font: 800 1rem var(--font-mono); background: #0a0a0a; color: #dcff5a; padding: 2px 10px; justify-self: start; font-variant-numeric: normal; }
-  .txt { display: grid; gap: 16px; }
-  h2 { font-size: clamp(2rem, 4.5vw, 3.4rem); text-transform: uppercase; line-height: .95; }
-  .lead { font: 600 1.25rem/1.4 var(--font-body); }
-  .body { color: var(--muted); }
-  .txt ul { margin: 0; padding: 0; list-style: none; }
-  .txt li { padding: 10px 0; border-top: 2px solid #0a0a0a; }
-  .lnk { font-weight: 700; }
-  .faqw { max-width: 820px; display: grid; gap: 16px; }
-  @media (max-width: 900px) {
-    .ww b { min-width: 100%; }
-    .flow, .does, .does.two { grid-template-columns: 1fr; }
-    .flow li:not(:last-child)::after { content: "↓"; right: auto; left: 50%; top: auto; bottom: -26px; transform: translateX(-50%); }
-    .subrow, .g { grid-template-columns: 1fr; gap: 20px; }
-    .gantt { --lab: 84px; }
-    .rl { font-size: .62rem; }
-    .b span { display: none; }
-    .top nav a:not(:last-child) { display: none; }
+  .hero { padding: 72px 0 48px; }
+  .kicker { font: 500 .8rem var(--font-mono); color: var(--muted); margin-bottom: 20px; }
+  .hero-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 56px; align-items: end; }
+  .hero h1 { text-wrap: wrap; }
+  .dot { color: var(--accent); }
+  .sub { margin-bottom: 24px; color: var(--muted); font-size: 1.1rem; }
+  .cta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+  .hint { color: var(--muted); font-size: .9rem; }
+  .hint .link { margin-left: 4px; }
+
+  .machine { padding-bottom: 24px; }
+  .machine-head { display: flex; justify-content: space-between; align-items: end; gap: 32px; padding: 20px 0; border-top: 2px solid var(--fg); }
+  .machine-head h2 { font-size: 1.25rem; letter-spacing: -.02em; }
+  .machine-head p { margin-top: 4px; color: var(--muted); max-width: 60ch; }
+  .steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 24px; color: var(--muted); font-size: .9rem; flex-shrink: 0; }
+  .steps li { display: flex; align-items: center; gap: 8px; }
+  .steps span { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); border: 1px solid var(--line); font: 600 .72rem var(--font-mono); color: var(--fg); }
+  .panel { position: relative; padding: 36px 36px 28px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+  .ex { position: absolute; top: 14px; right: 18px; font: 500 .72rem var(--font-mono); color: var(--muted); }
+  .meta { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding-top: 16px; color: var(--muted); font-size: .9rem; }
+  .badges { display: flex; gap: 8px; flex-wrap: wrap; }
+  .badges img { display: block; width: auto; }
+
+  .ww { display: grid; grid-template-columns: 1.6fr 1fr; gap: 40px; padding: 48px 0; border-bottom: 1px solid var(--line); }
+  .ww h2 { margin-bottom: 12px; font: 600 .75rem var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .ww ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 10px 24px; font-weight: 600; }
+  .ww li { display: inline-flex; align-items: center; }
+
+  .sec { padding-top: 96px; }
+  .sec-head { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: end; margin-bottom: 40px; }
+  .sec-head p { color: var(--muted); }
+
+  .does { list-style: none; margin: 28px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
+  .does li { padding-top: 16px; border-top: 2px solid var(--fg); }
+  .does h3 { margin-bottom: 6px; font-size: 1.05rem; }
+  .does p { color: var(--muted); font-size: .95rem; }
+
+  .bento { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; grid-template-areas: "mem mem know" "conn where know" "status status oss"; }
+  .tile { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+  .tile h3 { font-size: 1.45rem; line-height: 1.15; }
+  .tile > .link { margin-top: auto; padding-top: 4px; }
+  .t-memory { grid-area: mem; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); grid-template-rows: auto auto auto 1fr; column-gap: 32px; row-gap: 12px; }
+  .t-memory > :not(.art) { grid-column: 1; }
+  .t-memory .art { grid-column: 2; grid-row: 1 / span 5; align-self: center; }
+  .t-memory > .link { align-self: end; }
+  .t-knowledge { grid-area: know; }
+  .t-connect { grid-area: conn; }
+  .t-where { grid-area: where; }
+  .t-status { grid-area: status; }
+  .t-oss { grid-area: oss; }
+  .lead { color: var(--muted); }
+  .art { margin: 4px 0; min-width: 0; }
+  .art :global(.eyebrow) { color: var(--muted); }
+  .pts { list-style: none; margin: 0; padding: 0; font-size: .93rem; color: var(--muted); }
+  .pts li { padding: 8px 0; border-top: 1px solid var(--line); }
+  .pts strong { color: var(--fg); font-weight: 600; }
+
+  .where { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .where li { display: grid; gap: 2px; padding: 12px 14px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); }
+  .where strong { font-size: .95rem; }
+  .where span { color: var(--muted); font-size: .88rem; }
+  .where code { margin-top: 6px; font-size: .8rem; overflow-wrap: anywhere; }
+
+  .status-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .flag { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font: 600 .75rem var(--font-mono); white-space: nowrap; }
+  .flag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .t-status h3 { max-width: 30ch; }
+  .log { margin: 4px 0 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .log div { padding: 12px 14px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); }
+  .log dt { font: .72rem var(--font-mono); color: var(--muted); }
+  .log dd { margin: 4px 0 0; font-weight: 650; }
+  .log dd.bad { color: var(--accent-text); }
+  .oss-cta { display: flex; flex-wrap: wrap; gap: 8px; }
+  .oss-cta .btn { min-height: 40px; padding: 0 14px; font-size: .88rem; text-align: center; }
+
+  .band { margin-top: 96px; padding: 88px 0; background: var(--band); color: var(--band-fg); border-block: 1px solid var(--band-line); }
+  .band h2, .band h3 { color: var(--band-fg); }
+  .band .sec-head p, .cmdbox p { color: var(--band-muted); }
+  .band-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .cmdbox { padding: 24px; border: 1px solid var(--band-line); border-radius: var(--radius-lg); display: flex; flex-direction: column; gap: 10px; }
+  .cmdbox h3 { display: flex; align-items: center; gap: 10px; font-size: 1.1rem; }
+  .cmdbox h3 span { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); background: var(--accent); color: var(--accent-ink); font: 700 .75rem var(--font-mono); }
+  .cmdbox p { font-size: .93rem; flex: 1; }
+  .cmd { display: flex; gap: 8px; align-items: stretch; margin-top: 6px; }
+  .cmd pre { flex: 1; min-width: 0; margin: 0; padding: 12px 14px; background: var(--band-code); border: 1px solid var(--band-line); border-radius: var(--radius); font: .82rem/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cmd :global(.btn) { height: auto; }
+  .cmd :global(.btn.ghost) { background: transparent; color: var(--band-fg); border-color: var(--band-line); }
+  @media (hover: hover) and (pointer: fine) { .cmd :global(.btn.ghost:hover) { border-color: var(--band-fg); } }
+  .band-links { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 28px; }
+  .band-links a { font-weight: 500; text-decoration-color: var(--band-muted); }
+  .band-links a:hover { text-decoration-color: var(--accent); }
+
+  .questions { padding-bottom: 96px; }
+  .questions h2 { margin-bottom: 24px; }
+  .faq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 48px; align-items: start; }
+
+  @media (max-width: 1000px) {
+    .hero-grid, .sec-head, .ww { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+    .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "mem mem" "know conn" "know where" "status status" "oss oss"; }
+    .machine-head { flex-direction: column; align-items: start; gap: 12px; }
+    .steps { flex-wrap: wrap; gap: 8px 20px; }
+  }
+  @media (max-width: 720px) {
+    .top nav a:not(.btn) { display: none; }
+    .hero { padding: 40px 0 32px; }
+    .panel { padding: 40px 16px 20px; border-radius: 12px; }
+    .does, .band-grid, .faq-grid, .log { grid-template-columns: minmax(0, 1fr); }
+    .bento { grid-template-columns: minmax(0, 1fr); grid-template-areas: "mem" "know" "conn" "where" "status" "oss"; }
+    .t-memory { display: flex; }
+    .tile { padding: 20px; }
+    .sec { padding-top: 64px; }
+    .band { margin-top: 64px; padding: 56px 0; }
+    .cmd { flex-direction: column; }
   }
 </style>

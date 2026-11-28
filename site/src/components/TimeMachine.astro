@@ -1,0 +1,165 @@
+---
+import { demo } from "../data/site";
+import { timeline, keys, day, span, start } from "../data/timeline";
+
+const rows = Object.entries(keys).map(([k, label]) => ({
+  k,
+  label,
+  bars: timeline
+    .filter((f) => f.key === k)
+    .map((f) => {
+      const a = day(f.from), b = f.to ? day(f.to) : span;
+      return { ...f, a, b, left: (a / span) * 100, width: ((b - a) / span) * 100 };
+    }),
+}));
+const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov"];
+const firstKey = Object.keys(keys)[0];
+const firstIso = "2026-05-01";
+const first = day(firstIso);
+const initial = timeline.find((f) => f.key === firstKey && day(f.from) <= first && (!f.to || first < day(f.to)));
+const stateAt = (a: number, b: number) => (first < a ? "future" : first >= b && b != span ? "past" : "now");
+const current = timeline.find((f) => f.key === firstKey && !f.to);
+const request = `POST /v1/knowledge/search\n{ "query": "${keys[firstKey]}", "valid_at": "${firstIso}" }\n\n200  ${initial?.text}\n     valid ${initial?.from} → ${initial?.to ?? "now"}` + (initial?.to ? `\n     SUPERSEDED on ${initial.to}. Still stored.\n     today: ${current?.text}` : "");
+---
+
+<div class="tmx" id="tmx" style={`--p:${first / span}`}>
+  <div class="tmx-top">
+    <div class="tmx-dial">
+      <span class="tmx-lab">Ask as of</span>
+      <output class="tmx-date" id="tmx-date">{firstIso}</output>
+    </div>
+    <div class="tmx-ans" id="tmx-ans" data-st="past" aria-live="polite">
+      <p class="tmx-q" id="tmx-q">On {firstIso}, what was the {keys[firstKey].toLowerCase()}?</p>
+      <p class="tmx-a" id="tmx-a">{initial?.text}</p>
+      <p class="tmx-s" id="tmx-s">Changed on {initial?.to}. Today: {current?.text}. Old version still kept.</p>
+    </div>
+  </div>
+  <input class="tmx-range" type="range" min="0" max={span} value={first} aria-label="Choose a date" aria-valuetext={firstIso} />
+  <div class="tmx-gantt">
+    <div class="tmx-head"><span class="tmx-col">Topic</span><div class="tmx-months">{months.map((m) => <i>{m}</i>)}</div></div>
+    {rows.map((r) => (
+      <div class:list={["tmx-row", { sel: r.k === firstKey }]} data-key={r.k}>
+        <button type="button" class="tmx-rl" aria-pressed={r.k === firstKey ? "true" : "false"}>{r.label}</button>
+        <div class="tmx-track">
+          {r.bars.map((b) => (
+            <div class="tmx-b" data-a={b.a} data-b={b.b} data-state={stateAt(b.a, b.b)} title={b.text} style={`left:${b.left}%;width:${b.width}%`}><span>{b.text}</span></div>
+          ))}
+        </div>
+      </div>
+    ))}
+    <div class="tmx-playhead" aria-hidden="true"></div>
+  </div>
+  <ul class="tmx-key">
+    <li><i class="k now"></i>{demo.legend[0]}</li>
+    <li><i class="k past"></i>{demo.legend[1]}</li>
+    <li><i class="k future"></i>{demo.legend[2]}</li>
+  </ul>
+  <details class="tmx-dev"><summary>See the request an agent would send</summary>
+    <pre class="tmx-term" id="tmx-req">{request}</pre>
+    <p class="tmx-cap">Example call to <code>knowledge_search</code>. {demo.caption}</p>
+  </details>
+</div>
+
+<script define:vars={{ timeline, keys, span, start, firstKey }}>
+  const root = document.getElementById("tmx");
+  const range = root.querySelector("input");
+  const day = (s) => Math.round((Date.parse(s) - Date.parse(start)) / 864e5);
+  const iso = (d) => new Date(Date.parse(start) + d * 864e5).toISOString().slice(0, 10);
+  let sel = firstKey;
+  function update() {
+    const d = +range.value, at = iso(d);
+    root.style.setProperty("--p", d / span);
+    document.getElementById("tmx-date").textContent = at;
+    range.setAttribute("aria-valuetext", at);
+    root.querySelectorAll(".tmx-b").forEach((b) => {
+      b.dataset.state = d < +b.dataset.a ? "future" : d >= +b.dataset.b && b.dataset.b != span ? "past" : "now";
+    });
+    root.querySelectorAll(".tmx-row").forEach((r) => {
+      r.classList.toggle("sel", r.dataset.key === sel);
+      r.querySelector("button").setAttribute("aria-pressed", String(r.dataset.key === sel));
+    });
+    const facts = timeline.filter((f) => f.key === sel);
+    const hit = facts.find((f) => day(f.from) <= d && (!f.to || d < day(f.to)));
+    const cur = facts.find((f) => !f.to);
+    let out = `POST /v1/knowledge/search\n{ "query": "${keys[sel]}", "valid_at": "${at}" }\n\n`;
+    if (!hit) out += `200  nothing recorded for this date.`;
+    else {
+      out += `200  ${hit.text}\n     valid ${hit.from} → ${hit.to ?? "now"}`;
+      if (hit.to) out += `\n     SUPERSEDED on ${hit.to}. Still stored.\n     today: ${cur.text}`;
+    }
+    document.getElementById("tmx-req").textContent = out;
+    document.getElementById("tmx-ans").dataset.st = !hit ? "none" : hit.to ? "past" : "now";
+    document.getElementById("tmx-q").textContent = `On ${at}, what was the ${keys[sel].toLowerCase()}?`;
+    document.getElementById("tmx-a").textContent = hit ? hit.text : "Nothing was recorded for this date. Pick a later date.";
+    document.getElementById("tmx-s").textContent = !hit ? "" : hit.to
+      ? `Changed on ${hit.to}. Today: ${cur.text}. Old version still kept.`
+      : "Still true today.";
+  }
+  range.addEventListener("input", update);
+  root.querySelectorAll(".tmx-rl").forEach((b) => b.addEventListener("click", () => { sel = b.parentElement.dataset.key; update(); }));
+  update();
+</script>
+
+<style>
+  .tmx {
+    --lab: 150px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    min-width: 0;
+    color: var(--fg);
+    font-family: inherit;
+  }
+  .tmx-top { display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: end; }
+  .tmx-dial { display: grid; gap: 4px; }
+  .tmx-lab { font: 600 .75rem/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .tmx-date { font: 750 clamp(2.6rem, 7vw, 5rem)/1 var(--font-body); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+  .tmx-ans { border-radius: var(--radius); padding: 16px 20px; display: grid; gap: 4px; min-height: 7.5em; align-content: center; transition: background-color .2s; }
+  .tmx-ans[data-st="now"] { background: var(--accent-soft); }
+  .tmx-ans[data-st="past"] { background: var(--raised); }
+  .tmx-ans[data-st="none"] { background: var(--raised); }
+  .tmx-ans p { margin: 0; }
+  .tmx-q { font: .85rem var(--font-mono); color: var(--muted); }
+  .tmx-a { font: 700 clamp(1.3rem, 2.6vw, 1.9rem)/1.15 var(--font-body); letter-spacing: -.015em; }
+  .tmx-s { font-size: .95rem; color: var(--muted); }
+  .tmx-range { -webkit-appearance: none; appearance: none; width: calc(100% - var(--lab) + 24px); height: 44px; margin: 0 0 0 calc(var(--lab) - 12px); background: transparent; cursor: ew-resize; accent-color: var(--accent); }
+  .tmx-range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--line-strong); }
+  .tmx-range::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line-strong); }
+  .tmx-range::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; margin-top: -10px; border-radius: 50%; background: var(--accent); border: 3px solid var(--raised); box-shadow: 0 0 0 1px var(--accent); }
+  .tmx-range::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); border: 3px solid var(--raised); }
+  .tmx-range:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 4px; }
+  .tmx-gantt { position: relative; display: grid; gap: 8px; }
+  .tmx-head, .tmx-row { display: grid; grid-template-columns: var(--lab) minmax(0, 1fr); align-items: center; }
+  .tmx-col { font: 600 .68rem/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .tmx-months { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); overflow: hidden; font: .7rem var(--font-mono); color: var(--muted); }
+  .tmx-months i { font-style: normal; border-left: 1px solid var(--line); padding-left: 4px; }
+  .tmx-rl { text-align: left; font: 500 .8rem var(--font-mono); background: transparent; border: 1px solid var(--line-strong); border-radius: var(--radius); min-height: 40px; padding: 0 10px; margin-right: 12px; cursor: pointer; color: inherit; }
+  @media (hover: hover) and (pointer: fine) { .tmx-rl:hover { background: var(--raised); } }
+  .tmx-rl[aria-pressed="true"] { background: var(--fg); color: var(--raised); border-color: var(--fg); }
+  .tmx-rl:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  .tmx-track { position: relative; height: 40px; background: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 9.0909%); }
+  .tmx-b { position: absolute; top: 4px; bottom: 4px; display: flex; align-items: center; padding: 0 8px; overflow: hidden; font: 500 .75rem var(--font-mono); white-space: nowrap; border-radius: calc(var(--radius) * .6); transition: background-color .15s, color .15s; }
+  .tmx-b[data-state="now"] { background: var(--accent); color: var(--accent-ink); }
+  .tmx-b[data-state="past"] { background: var(--raised); color: var(--muted); text-decoration: line-through; text-decoration-color: var(--accent-text); text-decoration-thickness: 1.5px; box-shadow: inset 0 0 0 1px var(--line-strong); }
+  .tmx-b[data-state="future"] { border: 1px dashed var(--line-strong); color: var(--muted); }
+  .tmx-row:not(.sel) .tmx-b[data-state="now"] { background: var(--accent-soft); color: var(--fg); box-shadow: inset 0 0 0 1px var(--accent); }
+  .tmx-playhead { position: absolute; top: 0; bottom: 0; width: 0; left: calc(var(--lab) + (100% - var(--lab)) * var(--p)); border-left: 2px solid var(--accent); pointer-events: none; }
+  .tmx-key { display: flex; flex-wrap: wrap; gap: 8px 24px; list-style: none; margin: 0; padding: 0; font: .78rem var(--font-mono); color: var(--muted); }
+  .k { display: inline-block; width: 20px; height: 10px; margin-right: 8px; border-radius: 2px; vertical-align: 0; }
+  .k.now { background: var(--accent); }
+  .k.past { background: var(--raised); box-shadow: inset 0 0 0 1px var(--muted); }
+  .k.future { border: 1px dashed var(--line-strong); }
+  .tmx-dev summary { cursor: pointer; font: .8rem var(--font-mono); color: var(--muted); min-height: 32px; display: flex; align-items: center; }
+  .tmx-dev summary:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  .tmx-term { margin: 10px 0 0; background: var(--band); color: var(--band-fg); border-radius: var(--radius); padding: 16px 18px; font: .8rem/1.7 var(--font-mono); white-space: pre-wrap; min-height: 7.5em; }
+  .tmx-cap { font: .75rem var(--font-mono); color: var(--muted); margin: 8px 0 0; }
+  @media (max-width: 760px) {
+    .tmx { --lab: 92px; }
+    .tmx-top { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+    .tmx-date { font-size: 13vw; }
+    .tmx-rl { font-size: .68rem; padding: 0 6px; }
+    .tmx-b { padding: 0 4px; font-size: .62rem; }
+    .tmx-b span { overflow: hidden; text-overflow: ellipsis; }
+    .tmx-months i:nth-child(even) { color: transparent; }
+  }
+</style>
