@@ -1,5 +1,6 @@
 //! [`KeepService`]: the one service both transports call.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -405,6 +406,7 @@ impl KeepService {
             "knowledge_status" => self.knowledge_status(parse(args)?).await,
             "knowledge_summarize" => self.knowledge_summarize(parse(args)?).await,
             "knowledge_forget_source" => self.knowledge_forget_source(parse(args)?).await,
+            "knowledge_forget_sources" => self.knowledge_forget_sources(parse(args)?).await,
             _ => Err(unknown_tool(tool)),
         }
     }
@@ -1138,6 +1140,40 @@ impl KeepService {
         }))
     }
 
+    pub async fn knowledge_forget_sources(
+        &self,
+        req: KnowledgeForgetSourcesReq,
+    ) -> Result<Value, ApiError> {
+        if req.source_ids.is_empty() || req.source_ids.len() > MAX_FORGET_SOURCES {
+            return Err(ApiError::invalid(format!(
+                "source_ids must list between 1 and {MAX_FORGET_SOURCES} ids"
+            )));
+        }
+        let scope = self.scope(req.scope.as_ref())?;
+        // Only the scope that wrote a source may erase it; others' sources
+        // are reported as not found.
+        let forgotten = self
+            .knowledge
+            .forget_sources(&scope.corpus(), Some(&scope.partition()), &req.source_ids)
+            .await?;
+        let done: BTreeSet<&str> = forgotten.iter().map(|(id, _)| id.as_str()).collect();
+        let mut seen = BTreeSet::new();
+        let missing: Vec<&String> = req
+            .source_ids
+            .iter()
+            .filter(|id| !done.contains(id.as_str()) && seen.insert(id.as_str()))
+            .collect();
+        let forgotten: Vec<Value> = forgotten
+            .iter()
+            .map(|(id, receipt)| json!({ "sourceId": id, "receipt": receipt }))
+            .collect();
+        Ok(json!({
+            "scope": scope.label(),
+            "forgotten": forgotten,
+            "missing": missing,
+        }))
+    }
+
     pub async fn knowledge_cite(&self, req: KnowledgeCiteReq) -> Result<Value, ApiError> {
         let scope = self.scope(req.scope.as_ref())?;
         let access = read_access(&scope, req.source_ids, req.collections)?;
@@ -1339,6 +1375,7 @@ impl KeepService {
 
 /// Most ids or collections one read may name.
 const MAX_READ_FILTER: usize = 1000;
+const MAX_FORGET_SOURCES: usize = 1000;
 
 /// The scope's read access, narrowed to the requested sources and
 /// collections.

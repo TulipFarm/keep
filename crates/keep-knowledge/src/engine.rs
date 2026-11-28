@@ -2471,6 +2471,77 @@ impl Knowledge {
         }))
     }
 
+    /// Forget many sources in one ledger pass, with one projection cleanup
+    /// for the batch. Each forgotten source gets the receipt and journal
+    /// entry forgetting it alone, in this order, would give. Unknown ids,
+    /// repeats and sources outside `partition` (when given) are skipped.
+    pub async fn forget_sources(
+        &self,
+        corpus: &str,
+        partition: Option<&str>,
+        source_ids: &[String],
+    ) -> Result<Vec<(String, ForgetReport)>> {
+        let now = self.clock.now();
+        self.snapshots.forget(corpus);
+        let purged = self
+            .ledger
+            .purge_sources(corpus, partition, source_ids, now)
+            .await?;
+        if purged.is_empty() {
+            return Ok(vec![]);
+        }
+        let erased: BTreeSet<&String> = purged.iter().flat_map(|(_, r)| &r.point_ids).collect();
+        let mut by_partition: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (_, r) in &purged {
+            by_partition
+                .entry(r.partition.clone())
+                .or_default()
+                .extend(r.point_ids.iter().cloned());
+        }
+        let mut deferred_partitions = BTreeSet::new();
+        for (partition, stale) in &by_partition {
+            let one = PurgeReport {
+                partition: partition.clone(),
+                ..Default::default()
+            };
+            let (_, deferred) = self.clean_projection(corpus, &one, stale, now).await?;
+            if deferred > 0 {
+                deferred_partitions.insert(partition.clone());
+            }
+        }
+        // A fact kept by one source but deleted by a later one needs no
+        // re-projection.
+        let kept = PurgeReport {
+            kept_fact_ids: purged
+                .iter()
+                .flat_map(|(_, r)| &r.kept_fact_ids)
+                .filter(|id| !erased.contains(id))
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        self.clean_projection(corpus, &kept, &[], now).await?;
+        let projected = self.vectors.is_some();
+        Ok(purged
+            .into_iter()
+            .map(|(id, r)| {
+                let points = if projected { r.point_ids.len() } else { 0 };
+                let deferred = deferred_partitions.contains(&r.partition);
+                let report = ForgetReport {
+                    episodes: r.episodes,
+                    chunks: r.chunks,
+                    facts_deleted: r.facts_deleted,
+                    facts_kept: r.facts_kept,
+                    vectors_deleted: if deferred { 0 } else { points },
+                    vectors_deferred: if deferred { points } else { 0 },
+                };
+                (id, report)
+            })
+            .collect())
+    }
+
     /// Remove a whole corpus from the ledger and the vector projection.
     pub async fn delete_corpus(&self, corpus: &str) -> Result<()> {
         let _t = timing::span("knowledge.delete_corpus").items(1);

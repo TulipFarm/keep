@@ -1595,6 +1595,50 @@ impl Ledger for PgLedger {
         Ok(Some(report))
     }
 
+    async fn purge_sources(
+        &self,
+        corpus: &str,
+        partition: Option<&str>,
+        source_ids: &[String],
+        now: Time,
+    ) -> Result<Vec<(String, PurgeReport)>> {
+        let mut seen = BTreeSet::new();
+        let requested: Vec<String> = source_ids
+            .iter()
+            .filter(|id| seen.insert(id.as_str()))
+            .cloned()
+            .collect();
+        if requested.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut c = self.client().await?;
+        let tx = c.transaction().await.map_err(db)?;
+        // Locked in id order so concurrent batches cannot deadlock.
+        let found: BTreeMap<String, String> = tx
+            .query(
+                "SELECT id, partition_label FROM knowledge_sources
+                 WHERE corpus = $1 AND id = ANY($2) AND ($3::text IS NULL OR partition_label = $3)
+                 ORDER BY id FOR UPDATE",
+                &[&corpus, &requested, &partition],
+            )
+            .await
+            .map_err(db)?
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        let order: Vec<String> = requested
+            .into_iter()
+            .filter(|id| found.contains_key(id))
+            .collect();
+        if order.is_empty() {
+            tx.commit().await.map_err(db)?;
+            return Ok(vec![]);
+        }
+        let report = purge_sources_tx(&tx, corpus, &order, &found, now).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(report)
+    }
+
     async fn erasure_journal(&self) -> Result<Vec<ErasureEntry>> {
         let c = self.client().await?;
         Ok(
@@ -1650,6 +1694,246 @@ impl Ledger for PgLedger {
         tx.commit().await.map_err(db)?;
         Ok(parts)
     }
+}
+
+/// Re-splice the version chains that deleted facts had changed.
+async fn splice_dead(tx: &Transaction<'_>, corpus: &str, dead: &BTreeSet<String>) -> Result<()> {
+    let dead_vec: Vec<String> = dead.iter().cloned().collect();
+    let affected: Vec<String> = tx
+        .query(
+            "SELECT DISTINCT fact_id FROM knowledge_fact_versions WHERE corpus = $1 AND cause = ANY($2)",
+            &[&corpus, &dead_vec],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    for mut f in load_facts(tx, corpus, &affected).await? {
+        splice_versions(&mut f, dead);
+        tx.execute(
+            "DELETE FROM knowledge_fact_versions WHERE corpus = $1 AND fact_id = $2",
+            &[&corpus, &f.id],
+        )
+        .await
+        .map_err(db)?;
+        for v in &f.versions {
+            insert_version(tx, corpus, &f.id, v).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Delete entities no fact mentions any more, across the corpus.
+async fn sweep_entities(tx: &Transaction<'_>, corpus: &str) -> Result<()> {
+    tx.execute(
+        "DELETE FROM knowledge_entities en WHERE en.corpus = $1 AND NOT EXISTS (
+           SELECT 1 FROM knowledge_facts f
+           WHERE f.corpus = en.corpus AND (f.subject = en.id OR f.object_entity = en.id))",
+        &[&corpus],
+    )
+    .await
+    .map_err(db)?;
+    Ok(())
+}
+
+/// Forget whole sources, given in `order` and locked, with `partitions`
+/// mapping each to its partition. One pass for the batch, with the reports
+/// and journal entries purging them one by one in `order` would give: a fact
+/// stated by several of them is deleted by the last and kept by the others.
+async fn purge_sources_tx(
+    tx: &Transaction<'_>,
+    corpus: &str,
+    order: &[String],
+    partitions: &BTreeMap<String, String>,
+    now: Time,
+) -> Result<Vec<(String, PurgeReport)>> {
+    let mut reports: BTreeMap<&str, PurgeReport> = order
+        .iter()
+        .map(|id| {
+            (
+                id.as_str(),
+                PurgeReport {
+                    partition: partitions[id].clone(),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    let episode_source: BTreeMap<String, String> = tx
+        .query(
+            "SELECT id, source_id FROM knowledge_episodes WHERE corpus = $1 AND source_id = ANY($2)",
+            &[&corpus, &order],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect();
+    let episode_ids: Vec<String> = episode_source.keys().cloned().collect();
+    for source in episode_source.values() {
+        if let Some(r) = reports.get_mut(source.as_str()) {
+            r.episodes += 1;
+        }
+    }
+    let chunks: Vec<(String, String)> = tx
+        .query(
+            "SELECT id, episode_id FROM knowledge_chunks WHERE corpus = $1 AND episode_id = ANY($2) ORDER BY id",
+            &[&corpus, &episode_ids],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect();
+    for (id, episode) in &chunks {
+        if let Some(r) = reports.get_mut(episode_source[episode].as_str()) {
+            r.chunks += 1;
+            r.point_ids.push(id.clone());
+        }
+    }
+    let mut touched: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for r in tx
+        .query(
+            "SELECT DISTINCT fact_id, episode_id FROM knowledge_evidence WHERE corpus = $1 AND episode_id = ANY($2)",
+            &[&corpus, &episode_ids],
+        )
+        .await
+        .map_err(db)?
+    {
+        let episode: String = r.get(1);
+        touched
+            .entry(episode_source[&episode].as_str())
+            .or_default()
+            .insert(r.get(0));
+    }
+    let all_touched: Vec<String> = touched
+        .values()
+        .flatten()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    // Cascades to episodes, chunks and their evidence.
+    tx.execute(
+        "DELETE FROM knowledge_sources WHERE corpus = $1 AND id = ANY($2)",
+        &[&corpus, &order],
+    )
+    .await
+    .map_err(db)?;
+    tx.execute(
+        "DELETE FROM knowledge_evidence WHERE corpus = $1 AND source_id = ANY($2)",
+        &[&corpus, &order],
+    )
+    .await
+    .map_err(db)?;
+    tx.execute(
+        "DELETE FROM knowledge_vectors WHERE corpus = $1 AND source_id = ANY($2)",
+        &[&corpus, &order],
+    )
+    .await
+    .map_err(db)?;
+    let dead: BTreeSet<String> = tx
+        .query(
+            "DELETE FROM knowledge_facts f WHERE f.corpus = $1 AND f.id = ANY($2)
+               AND NOT EXISTS (SELECT 1 FROM knowledge_evidence e
+                               WHERE e.corpus = f.corpus AND e.fact_id = f.id)
+             RETURNING f.id",
+            &[&corpus, &all_touched],
+        )
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    let mut deleted_by: BTreeMap<&str, &str> = BTreeMap::new();
+    for id in order {
+        for fact in touched.get(id.as_str()).into_iter().flatten() {
+            if dead.contains(fact) {
+                deleted_by.insert(fact.as_str(), id.as_str());
+            }
+        }
+    }
+    for id in order {
+        let r = reports.get_mut(id.as_str()).expect("a report per source");
+        for fact in touched.get(id.as_str()).into_iter().flatten() {
+            if deleted_by.get(fact.as_str()) == Some(&id.as_str()) {
+                r.facts_deleted += 1;
+                r.point_ids.push(fact.clone());
+            } else {
+                r.facts_kept += 1;
+                r.kept_fact_ids.push(fact.clone());
+            }
+        }
+    }
+    splice_dead(tx, corpus, &dead).await?;
+    tx.execute(
+        "DELETE FROM knowledge_entity_aliases WHERE corpus = $1 AND source_id = ANY($2)",
+        &[&corpus, &order],
+    )
+    .await
+    .map_err(db)?;
+    sweep_entities(tx, corpus).await?;
+    let targets: Vec<String> = episode_ids
+        .iter()
+        .cloned()
+        .chain(chunks.into_iter().map(|(id, _)| id))
+        .collect();
+    tx.execute(
+        "DELETE FROM knowledge_jobs WHERE corpus = $1 AND target = ANY($2)
+           AND state NOT IN ('succeeded', 'failed')",
+        &[&corpus, &targets],
+    )
+    .await
+    .map_err(db)?;
+    let touched_partitions: BTreeSet<&String> = partitions.values().collect();
+    for partition in touched_partitions {
+        bump(tx, corpus, partition).await?;
+        tx.execute(
+            "DELETE FROM knowledge_index_cache WHERE corpus = $1 AND partition_label = $2",
+            &[&corpus, partition],
+        )
+        .await
+        .map_err(db)?;
+    }
+    let digests: Vec<String> = order.iter().map(|id| digest_hex(&[corpus, id])).collect();
+    let episodes: Vec<i64> = order
+        .iter()
+        .map(|id| reports[id.as_str()].episodes)
+        .collect();
+    let chunk_counts: Vec<i64> = order.iter().map(|id| reports[id.as_str()].chunks).collect();
+    let facts: Vec<i64> = order
+        .iter()
+        .map(|id| reports[id.as_str()].facts_deleted)
+        .collect();
+    // One statement; entries follow `order`, as they would one by one.
+    tx.execute(
+        "INSERT INTO knowledge_erasure_journal
+         (corpus_digest, target_kind, target_digest, erased_at, episodes, chunks, facts)
+         SELECT $1, 'source', t.digest, $3, t.episodes, t.chunks, t.facts
+         FROM unnest($2::text[], $4::bigint[], $5::bigint[], $6::bigint[])
+              WITH ORDINALITY AS t(digest, episodes, chunks, facts, n)
+         ORDER BY t.n",
+        &[
+            &digest_hex(&[corpus]),
+            &digests,
+            &now,
+            &episodes,
+            &chunk_counts,
+            &facts,
+        ],
+    )
+    .await
+    .map_err(db)?;
+    Ok(order
+        .iter()
+        .map(|id| {
+            (
+                id.clone(),
+                reports.remove(id.as_str()).expect("a report per source"),
+            )
+        })
+        .collect())
 }
 
 /// Delete episodes of `src` (with `None`, the whole source) and everything
@@ -1770,29 +2054,7 @@ async fn purge_tx(
     report.point_ids.extend(chunk_ids.iter().cloned());
     report.point_ids.extend(dead.iter().cloned());
 
-    let dead_vec: Vec<String> = dead.iter().cloned().collect();
-    let affected: Vec<String> = tx
-        .query(
-            "SELECT DISTINCT fact_id FROM knowledge_fact_versions WHERE corpus = $1 AND cause = ANY($2)",
-            &[&corpus, &dead_vec],
-        )
-        .await
-        .map_err(db)?
-        .iter()
-        .map(|r| r.get(0))
-        .collect();
-    for mut f in load_facts(tx, corpus, &affected).await? {
-        splice_versions(&mut f, &dead);
-        tx.execute(
-            "DELETE FROM knowledge_fact_versions WHERE corpus = $1 AND fact_id = $2",
-            &[&corpus, &f.id],
-        )
-        .await
-        .map_err(db)?;
-        for v in &f.versions {
-            insert_version(tx, corpus, &f.id, v).await?;
-        }
-    }
+    splice_dead(tx, corpus, &dead).await?;
     // Aliases are recorded per source, not per episode: they stay while
     // any episode of the source does.
     tx.execute(
@@ -1803,14 +2065,7 @@ async fn purge_tx(
     )
     .await
     .map_err(db)?;
-    tx.execute(
-        "DELETE FROM knowledge_entities en WHERE en.corpus = $1 AND NOT EXISTS (
-           SELECT 1 FROM knowledge_facts f
-           WHERE f.corpus = en.corpus AND (f.subject = en.id OR f.object_entity = en.id))",
-        &[&corpus],
-    )
-    .await
-    .map_err(db)?;
+    sweep_entities(tx, corpus).await?;
     let targets: Vec<String> = episode_ids.iter().chain(&chunk_ids).cloned().collect();
     tx.execute(
         "DELETE FROM knowledge_jobs WHERE corpus = $1 AND target = ANY($2)

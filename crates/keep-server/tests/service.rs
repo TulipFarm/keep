@@ -581,6 +581,89 @@ async fn host_scenario(svc: &KeepService) {
     assert_eq!(e.code, ErrorCode::Invalid);
 }
 
+/// Forgetting many sources at once erases only the caller's own and reports
+/// the rest as missing.
+async fn batch_forget_scenario(svc: &KeepService) {
+    let mine = json!({ "user": "sam", "project": "batch" });
+    let theirs = json!({ "user": "sam", "project": "batch-other" });
+    for (scope, id, text) in [
+        (&mine, "doc-1", "The quarterly offsite is held in Lisbon."),
+        (&mine, "doc-2", "Parking passes come from the front desk."),
+        (&mine, "doc-3", "Lisbon hotels are booked early."),
+        (
+            &theirs,
+            "doc-4",
+            "The offsite budget is approved by finance.",
+        ),
+    ] {
+        ok(
+            svc,
+            "knowledge_ingest",
+            json!({ "scope": scope, "source_id": id, "title": id, "text": text }),
+        )
+        .await;
+    }
+    let forgot = ok(
+        svc,
+        "knowledge_forget_sources",
+        json!({ "scope": mine, "source_ids": ["doc-2", "doc-1", "doc-4", "nope", "doc-1"] }),
+    )
+    .await;
+    let ids: Vec<&str> = forgot["forgotten"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["sourceId"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["doc-2", "doc-1"], "{forgot}");
+    assert!(
+        forgot["forgotten"][0]["receipt"]["chunks"]
+            .as_i64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(forgot["missing"], json!(["doc-4", "nope"]), "{forgot}");
+    let found = |v: &Value| -> Vec<String> {
+        let mut s: Vec<String> = v["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["source_id"].as_str().unwrap().to_owned())
+            .collect();
+        s.sort();
+        s.dedup();
+        s
+    };
+    let left = ok(
+        svc,
+        "knowledge_search",
+        json!({ "scope": mine, "query": "Lisbon" }),
+    )
+    .await;
+    assert_eq!(found(&left), ["doc-3"], "{left}");
+    let other = ok(
+        svc,
+        "knowledge_search",
+        json!({ "scope": theirs, "query": "offsite" }),
+    )
+    .await;
+    assert_eq!(found(&other), ["doc-4"], "{other}");
+    for ids in [json!([]), json!(vec!["x"; 1001])] {
+        let e = err(
+            svc,
+            "knowledge_forget_sources",
+            json!({ "scope": mine, "source_ids": ids }),
+        )
+        .await;
+        assert_eq!(e.code, ErrorCode::Invalid);
+    }
+}
+
+#[tokio::test]
+async fn in_memory_batch_forget_scenario() {
+    batch_forget_scenario(&in_memory()).await;
+}
+
 #[tokio::test]
 async fn in_memory_host_scenario() {
     host_scenario(&in_memory()).await;
@@ -865,6 +948,7 @@ async fn run_db(storage: StorageProfile, pg: &str, qdrant: Option<&str>) {
             let svc = KeepService::open(&a).await.unwrap();
             shared_memory_scenario(&svc).await;
             host_scenario(&svc).await;
+            batch_forget_scenario(&svc).await;
             drop(svc);
             // A second process sees what the first one wrote.
             let first = KeepService::open(&a).await.unwrap();

@@ -10,7 +10,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use keep_knowledge::engine::{EpisodeInput, ExternalClaim, SourceInput, day, namespace};
 use keep_knowledge::extract::{Claim, FactExtractor, RuleExtractor};
-use keep_knowledge::model::{Episode, FactStatus, JobCounts, JobKind, JobState, NewJob, TimeBasis};
+use keep_knowledge::model::{
+    Episode, FactStatus, JobCounts, JobKind, JobState, NewJob, TimeBasis, digest_hex,
+};
 use keep_knowledge::temporal::ValidMatch;
 use keep_knowledge::{
     Access, AsOf, EvidenceAllowance, Fetched, IndexRequest, ItemRef, Knowledge, KnowledgeConfig,
@@ -126,6 +128,8 @@ async fn suite(label: &str, env: &Env) {
     permissions(env).await;
     eprintln!("[{label}] forget");
     forget(env).await;
+    eprintln!("[{label}] forget many");
+    forget_many(env).await;
     eprintln!("[{label}] evidence budget");
     evidence_budget(env).await;
     eprintln!("[{label}] traverse");
@@ -1140,6 +1144,157 @@ async fn forget(env: &Env) {
         assert!(!dump.contains(w), "journal holds {w}");
     }
     k.delete_corpus(c).await.unwrap();
+}
+
+/// Ingest the same sources into `c`: one to keep, three to forget, and one in
+/// another partition.
+async fn forget_many_corpus(k: &Knowledge, c: &str) {
+    for (id, partition, texts) in [
+        ("keep", "team", vec!["Tomas Reyes works at Northwind Labs."]),
+        (
+            "a",
+            "team",
+            vec![
+                "Tomas Reyes works at Northwind Labs.",
+                "Lena Park leads Project Juniper.",
+            ],
+        ),
+        (
+            "b",
+            "team",
+            vec![
+                "Lena Park leads Project Juniper.",
+                "Mira Chen leads Project Aspen.",
+            ],
+        ),
+        ("c", "team", vec!["Omar Haddad works at Garden Analytics."]),
+        ("ops", "ops", vec!["Mira Chen leads Project Aspen."]),
+    ] {
+        let turns = texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| turn(&format!("{id}{i}"), day(2024, 5, 1), t))
+            .collect();
+        k.ingest(c, source(id, partition, "notes", id), turns)
+            .await
+            .unwrap();
+    }
+    k.run_jobs(c, 10).await.unwrap();
+}
+
+/// Forgetting sources together gives each the receipt and journal entry
+/// forgetting them one by one would, and leaves the same knowledge behind.
+async fn forget_many(env: &Env) {
+    let k = &env.k;
+    env.clock.set(day(2024, 5, 1));
+    let (one, many) = ("forget-one", "forget-many");
+    forget_many_corpus(k, one).await;
+    forget_many_corpus(k, many).await;
+    let earlier = k.ledger().erasure_journal().await.unwrap().len();
+
+    let mut serial = vec![];
+    for id in ["b", "a", "c"] {
+        serial.push((
+            id.to_owned(),
+            k.forget_source(one, id).await.unwrap().unwrap(),
+        ));
+    }
+    let ids: Vec<String> = ["b", "missing", "a", "ops", "b", "c"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let batch = k.forget_sources(many, Some("team"), &ids).await.unwrap();
+    assert_eq!(batch, serial);
+    assert_eq!(batch[0].1.facts_deleted, 1, "{batch:?}");
+    assert_eq!(batch[1].1.facts_deleted, 1, "{batch:?}");
+    assert_eq!(batch[1].1.facts_kept, 1, "{batch:?}");
+    assert!(
+        k.forget_sources(many, None, &ids[..1])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let journal = k.ledger().erasure_journal().await.unwrap();
+    let entries = |c: &str| -> Vec<(String, i64, i64, i64)> {
+        journal[earlier..]
+            .iter()
+            .filter(|e| e.corpus_digest == digest_hex(&[c]))
+            .map(|e| (e.target_digest.clone(), e.episodes, e.chunks, e.facts))
+            .collect()
+    };
+    let (one_entries, many_entries) = (entries(one), entries(many));
+    assert_eq!(many_entries.len(), 3);
+    for (i, id) in ["b", "a", "c"].iter().enumerate() {
+        assert_eq!(many_entries[i].0, digest_hex(&[many, id]));
+        assert_eq!(
+            many_entries[i].1..=many_entries[i].3,
+            one_entries[i].1..=one_entries[i].3
+        );
+    }
+
+    for c in [one, many] {
+        // The other partition's source stays; the forgotten ones are gone.
+        assert!(k.ledger().source(c, "ops").await.unwrap().is_some());
+        assert!(k.ledger().source(c, "a").await.unwrap().is_none());
+        let kept = facts_found(k, c, "Tomas Reyes Northwind", AsOf::now()).await;
+        assert!(kept.iter().any(|f| f.0.contains("Northwind")), "{c}");
+        let gone = facts_found(k, c, "Lena Park Juniper", AsOf::now()).await;
+        assert!(
+            gone.iter().all(|f| !f.0.contains("Juniper")),
+            "{c}: {gone:?}"
+        );
+        let res = k
+            .search(
+                &search_req(c, everyone(), "Juniper Garden Analytics", AsOf::now()),
+                &mut EvidenceAllowance::default(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            res.hits
+                .iter()
+                .all(|h| !h.text.contains("Juniper") && !h.text.contains("Garden")),
+            "{c}"
+        );
+        let names = k
+            .index(
+                c,
+                &everyone(),
+                &IndexRequest {
+                    level: 2,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let dump = format!("{} {:?}", names.text, names.entries);
+        for w in ["Lena Park", "Omar Haddad", "Garden Analytics"] {
+            assert!(!dump.contains(w), "{c} still names {w}");
+        }
+        // Every remaining point has a vector and no forgotten one does.
+        let points = k.ledger().point_ids(c).await.unwrap();
+        let q = keep_providers::Embedder::embed(
+            &keep_providers::HashEmbedder::new(256),
+            &["Lena Park leads Project Juniper.".to_string()],
+        )
+        .await
+        .unwrap()
+        .vectors
+        .remove(0);
+        let mut found = 0;
+        for partition in ["team", "ops"] {
+            found += k
+                .vectors()
+                .unwrap()
+                .search(&k.config().collection, &namespace(c, partition), &q, 100)
+                .await
+                .unwrap()
+                .len();
+        }
+        assert_eq!(found, points.len(), "{c}");
+        k.delete_corpus(c).await.unwrap();
+    }
 }
 
 fn only(ids: &[&str]) -> Access {
