@@ -123,6 +123,8 @@ the subcommand.
 | | `KEEP_ONNX_SPIN` | `0` | `1` lets idle ONNX threads spin, which is faster on a dedicated host and burns CPU on a shared one |
 | `--ingest-job-budget-ms` | `KEEP_INGEST_JOB_BUDGET_MS` | 5000 | Time an ingest spends on its own source's jobs before it answers; `0` leaves them all to the worker |
 | `--job-pause-ms` | `KEEP_JOB_PAUSE_MS` | 200 | Pause between the background worker's job batches |
+| `--succeeded-job-retention-days` | `KEEP_SUCCEEDED_JOB_RETENTION_DAYS` | 7 | Days the worker keeps a succeeded job before deleting it; `0` keeps them forever |
+| `--failed-job-retention-days` | `KEEP_FAILED_JOB_RETENTION_DAYS` | 30 | Days the worker keeps a failed job and its last error; `0` keeps them forever |
 | `--data-dir` | `KEEP_DATA_DIR` | platform data dir | Receipt key and model cache; see [Receipts](#receipts-and-the-data-directory) |
 | | `KEEP_MODEL_CACHE` | `<data-dir>/models` | Where the local model is downloaded; `/opt/keep/models` (baked in) in the image |
 | `--evidence-budget-tokens` | `KEEP_EVIDENCE_BUDGET_TOKENS` | off | Evidence each caller may draw per window; see [Evidence budget](#evidence-budget) |
@@ -447,12 +449,17 @@ Keep never reports success for work it has not done.
   redoes them) or `unknown` (the job counts could not be read).
 - `keep serve` and `keep mcp` run a background worker every 5 seconds that
   retries due jobs for every user. It logs only when its state changes.
+  It also deletes finished jobs older than
+  `KEEP_SUCCEEDED_JOB_RETENTION_DAYS` (7) or, for failed ones,
+  `KEEP_FAILED_JOB_RETENTION_DAYS` (30), up to 20,000 of each per run, so
+  the job table stays bounded. A partition whose failed jobs have all been
+  deleted reports `complete` again.
 - `knowledge_status` shows the counts (`pending`, `running`,
-  `retryScheduled`, `succeeded`, `failed`) for the caller's own scope, so a
-  token limited to one project learns nothing about other projects.
-  `knowledge_ingest` returns the same counts without `succeeded`: finished
-  jobs pile up as a corpus grows, and counting them on every write would
-  slow each write down.
+  `retryScheduled`, `succeeded`, `failed`) of the jobs still kept for the
+  caller's own scope, so a token limited to one project learns nothing
+  about other projects. `knowledge_ingest` returns the same counts without
+  `succeeded`: a busy corpus keeps many finished jobs, and counting them on
+  every write would slow each write down.
 
 ### Compare-and-swap writes
 

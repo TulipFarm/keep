@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use keep_knowledge::engine::JobRetention;
+
 use crate::budget::{BudgetConfig, BudgetPer};
 
 #[derive(Debug, Parser)]
@@ -187,6 +189,24 @@ pub struct ServiceArgs {
     /// backlog work yields CPU to requests. 0 runs batches back to back.
     #[arg(long, env = "KEEP_JOB_PAUSE_MS", default_value_t = 200, global = true)]
     pub job_pause_ms: u64,
+    /// Days a succeeded background job is kept before the worker deletes
+    /// it. 0 keeps them forever.
+    #[arg(
+        long,
+        env = "KEEP_SUCCEEDED_JOB_RETENTION_DAYS",
+        default_value_t = 7,
+        global = true
+    )]
+    pub succeeded_job_retention_days: u32,
+    /// Days a failed background job, and its last error, is kept before the
+    /// worker deletes it. 0 keeps them forever.
+    #[arg(
+        long,
+        env = "KEEP_FAILED_JOB_RETENTION_DAYS",
+        default_value_t = 30,
+        global = true
+    )]
+    pub failed_job_retention_days: u32,
     /// Model sessions embedding at once with `--embedder local`. Sessions
     /// times threads is the most cores embedding uses. Defaults to fit half
     /// the available cores.
@@ -226,6 +246,15 @@ impl ServiceArgs {
             } else {
                 EmbedderKind::Hash
             })
+    }
+
+    /// How long finished background jobs are kept.
+    pub fn job_retention(&self) -> JobRetention {
+        let days = |d: u32| (d > 0).then(|| chrono::Duration::days(d.into()));
+        JobRetention {
+            succeeded: days(self.succeeded_job_retention_days),
+            failed: days(self.failed_job_retention_days),
+        }
     }
 
     /// The evidence budget, if one is set.
@@ -401,5 +430,27 @@ mod tests {
             panic!("mcp")
         };
         assert_eq!(m.server.as_deref(), Some("http://127.0.0.1:1"));
+    }
+
+    #[test]
+    fn job_retention_is_in_days_and_zero_keeps_forever() {
+        let cli = Cli::try_parse_from(["keep", "serve"]).unwrap();
+        assert_eq!(cli.service.job_retention(), JobRetention::default());
+        let cli = Cli::try_parse_from([
+            "keep",
+            "serve",
+            "--succeeded-job-retention-days",
+            "0",
+            "--failed-job-retention-days",
+            "2",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.service.job_retention(),
+            JobRetention {
+                succeeded: None,
+                failed: Some(chrono::Duration::days(2)),
+            }
+        );
     }
 }

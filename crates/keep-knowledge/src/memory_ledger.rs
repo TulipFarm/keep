@@ -825,6 +825,23 @@ impl Ledger for MemoryLedger {
         Ok(counts)
     }
 
+    async fn prune_jobs(&self, state: JobState, before: Time, limit: usize) -> Result<usize> {
+        if !matches!(state, JobState::Succeeded | JobState::Failed) {
+            return Ok(0);
+        }
+        let mut s = self.lock();
+        let mut old: Vec<(Time, i64)> = s
+            .jobs
+            .iter()
+            .filter(|j| j.state == state && j.next_attempt_at < before)
+            .map(|j| (j.next_attempt_at, j.id))
+            .collect();
+        old.sort();
+        let gone: BTreeSet<i64> = old.into_iter().take(limit).map(|(_, id)| id).collect();
+        s.jobs.retain(|j| !gone.contains(&j.id));
+        Ok(gone.len())
+    }
+
     async fn due_corpora(&self, now: Time, limit: usize) -> Result<Vec<String>> {
         let mut out = std::collections::BTreeSet::new();
         for j in &self.lock().jobs {

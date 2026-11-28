@@ -278,7 +278,37 @@ pub struct JobRun {
     /// Claimed but handed back unstarted at a deadline; still pending.
     #[serde(default)]
     pub deferred: usize,
+    /// Finished jobs deleted because their retention had passed.
+    #[serde(default)]
+    pub pruned: usize,
 }
+
+/// How long finished jobs are kept before [`Knowledge::run_due_jobs`]
+/// deletes them. `None` keeps them forever. Nothing reads a succeeded job
+/// once it is done, except `succeeded` in [`Knowledge::job_counts`]; failed
+/// jobs are kept longer, as they make a partition's enrichment `failed` and
+/// carry the last error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JobRetention {
+    pub succeeded: Option<chrono::Duration>,
+    pub failed: Option<chrono::Duration>,
+}
+
+impl Default for JobRetention {
+    fn default() -> Self {
+        Self {
+            succeeded: Some(chrono::Duration::days(7)),
+            failed: Some(chrono::Duration::days(30)),
+        }
+    }
+}
+
+/// Finished jobs one prune statement deletes. Small, so no statement holds
+/// the ledger connection or row locks for long.
+pub const PRUNE_JOB_BATCH: usize = 1000;
+/// Prune statements per state per [`Knowledge::run_due_jobs`], so a long
+/// backlog drains over several runs instead of stalling one.
+pub const PRUNE_JOB_ROUNDS: usize = 20;
 
 /// Jobs one claim takes for [`Knowledge::run_source_jobs`].
 pub const SOURCE_JOB_BATCH: usize = 16;
@@ -318,6 +348,7 @@ pub struct Knowledge {
     snapshots: Arc<Snapshots>,
     /// Sleep between background job batches; see [`Self::with_job_pause`].
     job_pause: Duration,
+    job_retention: JobRetention,
 }
 
 /// Vector namespace for one partition of one corpus. Opaque so labels never
@@ -477,6 +508,7 @@ impl Knowledge {
             reranker: None,
             snapshots: Arc::default(),
             job_pause: Duration::ZERO,
+            job_retention: JobRetention::default(),
         }
     }
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
@@ -528,6 +560,12 @@ impl Knowledge {
         self
     }
 
+    /// Keep finished jobs as long as `retention` says; see [`JobRetention`].
+    pub fn with_job_retention(mut self, retention: JobRetention) -> Self {
+        self.job_retention = retention;
+        self
+    }
+
     /// Another engine over the same ledger, vectors, embedder, extractor,
     /// tokenizer and config, with its own clock, so independent corpora can
     /// be ingested concurrently.
@@ -546,6 +584,7 @@ impl Knowledge {
             reranker: self.reranker.clone(),
             snapshots: self.snapshots.clone(),
             job_pause: self.job_pause,
+            job_retention: self.job_retention,
         }
     }
 
@@ -972,13 +1011,18 @@ impl Knowledge {
     /// pausing as set by [`Self::with_job_pause`]. For a background worker,
     /// so retries, deferred vector deletions and work an ingest left behind
     /// finish without a new request. Also sweeps stored vectors whose grace
-    /// period has passed.
+    /// period has passed and prunes finished jobs past their
+    /// [`JobRetention`], at most [`PRUNE_JOB_ROUNDS`] batches of
+    /// [`PRUNE_JOB_BATCH`] per state.
     pub async fn run_due_jobs(&self, max_corpora: usize, max_rounds: usize) -> Result<JobRun> {
         let now = self.clock.now();
         self.ledger
             .sweep_vectors(now - chrono::Duration::seconds(VECTOR_GRACE_SECONDS))
             .await?;
-        let mut total = JobRun::default();
+        let mut total = JobRun {
+            pruned: self.prune_jobs(now).await?,
+            ..JobRun::default()
+        };
         for corpus in self.ledger.due_corpora(now, max_corpora).await? {
             let run = self
                 .run_rounds(
@@ -994,6 +1038,27 @@ impl Knowledge {
             total.failed += run.failed;
         }
         Ok(total)
+    }
+
+    async fn prune_jobs(&self, now: Time) -> Result<usize> {
+        let mut pruned = 0;
+        for (state, keep) in [
+            (JobState::Succeeded, self.job_retention.succeeded),
+            (JobState::Failed, self.job_retention.failed),
+        ] {
+            let Some(keep) = keep else { continue };
+            for _ in 0..PRUNE_JOB_ROUNDS {
+                let n = self
+                    .ledger
+                    .prune_jobs(state, now - keep, PRUNE_JOB_BATCH)
+                    .await?;
+                pruned += n;
+                if n < PRUNE_JOB_BATCH {
+                    break;
+                }
+            }
+        }
+        Ok(pruned)
     }
 
     async fn ensure_collection(&self) -> Result<()> {

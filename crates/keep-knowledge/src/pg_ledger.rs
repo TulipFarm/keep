@@ -40,11 +40,24 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "knowledge_0004_stored_vectors",
         include_str!("../migrations/knowledge_0004_stored_vectors.sql"),
     ),
+    (
+        "knowledge_0005_job_indexes",
+        include_str!("../migrations/knowledge_0005_job_indexes.sql"),
+    ),
 ];
 
 const DUE_CORPORA: &str = "SELECT DISTINCT corpus FROM knowledge_jobs
      WHERE state IN ('pending', 'retry_scheduled', 'running') AND next_attempt_at <= $1
      ORDER BY corpus LIMIT $2";
+
+// `id = ANY(ARRAY(..))` keeps a primary-key lookup even in a generic plan,
+// where `id IN (..)` may hash-join against a scan of the whole table.
+const PRUNE_SUCCEEDED: &str = "DELETE FROM knowledge_jobs WHERE id = ANY(ARRAY(
+       SELECT id FROM knowledge_jobs WHERE state = 'succeeded' AND next_attempt_at < $1
+       ORDER BY next_attempt_at LIMIT $2))";
+const PRUNE_FAILED: &str = "DELETE FROM knowledge_jobs WHERE id = ANY(ARRAY(
+       SELECT id FROM knowledge_jobs WHERE state = 'failed' AND next_attempt_at < $1
+       ORDER BY next_attempt_at LIMIT $2))";
 
 pub struct PgLedger {
     url: String,
@@ -1260,6 +1273,22 @@ impl Ledger for PgLedger {
         let answered = c.query(DUE_CORPORA, &[&now, &1i64]).await;
         *slot = Some(c);
         answered.map(|_| ()).map_err(db)
+    }
+
+    async fn prune_jobs(&self, state: JobState, before: Time, limit: usize) -> Result<usize> {
+        // The state is a literal so the planner walks the partial index
+        // `knowledge_jobs_finished` oldest first and stops at the limit.
+        let sql = match state {
+            JobState::Succeeded => PRUNE_SUCCEEDED,
+            JobState::Failed => PRUNE_FAILED,
+            _ => return Ok(0),
+        };
+        let c = self.client().await?;
+        let n = c
+            .execute(sql, &[&before, &(limit as i64)])
+            .await
+            .map_err(db)?;
+        Ok(n as usize)
     }
 
     async fn due_corpora(&self, now: Time, limit: usize) -> Result<Vec<String>> {
