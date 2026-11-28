@@ -817,6 +817,8 @@ fn args(storage: StorageProfile, pg: &str, qdrant: Option<&str>, name: &str) -> 
         evidence_budget_per: BudgetPer::Token,
         ingest_job_budget_ms: 5000,
         job_pause_ms: 0,
+        succeeded_job_retention_days: 7,
+        failed_job_retention_days: 30,
         onnx_sessions: None,
         onnx_threads: None,
         model: Default::default(),

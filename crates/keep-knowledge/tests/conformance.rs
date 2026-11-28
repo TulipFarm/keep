@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use keep_knowledge::engine::{EpisodeInput, ExternalClaim, SourceInput, day, namespace};
 use keep_knowledge::extract::{Claim, FactExtractor, RuleExtractor};
-use keep_knowledge::model::{Episode, FactStatus, JobCounts, JobState, TimeBasis};
+use keep_knowledge::model::{Episode, FactStatus, JobCounts, JobKind, JobState, NewJob, TimeBasis};
 use keep_knowledge::temporal::ValidMatch;
 use keep_knowledge::{
     Access, AsOf, EvidenceAllowance, Fetched, IndexRequest, ItemRef, Knowledge, KnowledgeConfig,
@@ -148,6 +148,72 @@ async fn suite(label: &str, env: &Env) {
     source_jobs_stay_in_their_source(env).await;
     eprintln!("[{label}] source jobs stop at the deadline");
     source_jobs_stop_at_the_deadline(env).await;
+    eprintln!("[{label}] finished jobs are pruned oldest first");
+    finished_jobs_are_pruned_oldest_first(env).await;
+}
+
+/// Pruning deletes finished jobs in the asked state that ended before the
+/// cutoff, oldest first and at most `limit` at a time, and never touches
+/// unfinished ones, however old.
+async fn finished_jobs_are_pruned_oldest_first(env: &Env) {
+    let ledger = env.k.ledger();
+    let c = "prune_jobs";
+    let t0 = day(2024, 10, 1);
+    let jobs: Vec<NewJob> = (0..4)
+        .map(|n| NewJob {
+            kind: JobKind::Project,
+            target: format!("point-{n}"),
+        })
+        .collect();
+    ledger.enqueue(c, &jobs, t0).await.unwrap();
+    let mut done = Vec::new();
+    for hours in 0..3 {
+        let at = t0 + chrono::Duration::hours(hours);
+        let job = ledger.claim_jobs(c, at, 1).await.unwrap().remove(0);
+        assert!(ledger.complete_job(&job, at).await.unwrap());
+        done.push(job.id);
+    }
+    let ids = |jobs: Vec<keep_knowledge::model::Job>| -> Vec<(i64, JobState)> {
+        jobs.into_iter().map(|j| (j.id, j.state)).collect()
+    };
+    let all = ids(ledger.jobs(c).await.unwrap());
+    let pending = all[3];
+    assert_eq!(pending.1, JobState::Pending);
+
+    let cutoff = t0 + chrono::Duration::days(1);
+    for state in [JobState::Pending, JobState::Running, JobState::Failed] {
+        assert_eq!(ledger.prune_jobs(state, cutoff, 10).await.unwrap(), 0);
+    }
+    // Before the second job ended, only the first one goes.
+    let early = t0 + chrono::Duration::minutes(35);
+    assert_eq!(
+        ledger
+            .prune_jobs(JobState::Succeeded, early, 10)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        ledger
+            .prune_jobs(JobState::Succeeded, cutoff, 1)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        ids(ledger.jobs(c).await.unwrap()),
+        [(done[2], JobState::Succeeded), pending],
+        "the oldest finished jobs went first"
+    );
+    assert_eq!(
+        ledger
+            .prune_jobs(JobState::Succeeded, cutoff, 10)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(ids(ledger.jobs(c).await.unwrap()), [pending]);
+    env.k.delete_corpus(c).await.unwrap();
 }
 
 /// The default embedder, counting the texts it embeds and taking `delay`
@@ -1918,6 +1984,21 @@ async fn job_retries(env: Env) {
         .unwrap();
     assert!(!res.hits.is_empty());
     assert!(res.hits.iter().all(|h| matches!(h.item, ItemRef::Chunk(_))));
+
+    // The worker deletes succeeded jobs after a week and failed ones, which
+    // carry the error and make the enrichment `failed`, after 30 days.
+    env.clock.advance(chrono::Duration::days(8));
+    assert!(k.run_due_jobs(100, 10).await.unwrap().pruned >= 1);
+    let left = k.ledger().jobs(c).await.unwrap();
+    assert!(
+        left.iter().all(|j| j.state == JobState::Failed) && left.len() == 1,
+        "{left:?}"
+    );
+    let kept = k.job_counts(c, "team").await.unwrap();
+    assert_eq!((kept.succeeded, kept.failed), (0, 1), "{kept:?}");
+    env.clock.advance(chrono::Duration::days(23));
+    assert_eq!(k.run_due_jobs(100, 10).await.unwrap().pruned, 1);
+    assert!(k.ledger().jobs(c).await.unwrap().is_empty());
     k.delete_corpus(c).await.unwrap();
 }
 
@@ -2304,7 +2385,8 @@ async fn postgres_probe_answers_while_the_ledger_is_busy() {
             let indexes: Vec<String> = other
                 .query(
                     "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()
-                       AND indexname IN ('knowledge_chunks_episode', 'knowledge_evidence_episode')
+                       AND indexname IN ('knowledge_chunks_episode', 'knowledge_evidence_episode',
+                         'knowledge_jobs_open_due', 'knowledge_jobs_finished')
                      ORDER BY indexname",
                     &[],
                 )
@@ -2315,7 +2397,12 @@ async fn postgres_probe_answers_while_the_ledger_is_busy() {
                 .collect();
             assert_eq!(
                 indexes,
-                ["knowledge_chunks_episode", "knowledge_evidence_episode"]
+                [
+                    "knowledge_chunks_episode",
+                    "knowledge_evidence_episode",
+                    "knowledge_jobs_finished",
+                    "knowledge_jobs_open_due"
+                ]
             );
 
             other

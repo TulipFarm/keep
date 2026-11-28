@@ -281,6 +281,10 @@ disabled by default (`DisabledSummarizer`).
    handed back as pending. A server ingest uses it, leaving everything else
    to the background `run_due_jobs`, which can pause between batches
    (`with_job_pause`).
+8. Finished jobs are deleted by `run_due_jobs` once their retention has
+   passed (`with_job_retention`): 7 days for succeeded jobs and 30 for
+   failed ones by default, a few small batches per run. A job counts as
+   finished when its last lease ended.
 
 ## Forgetting
 

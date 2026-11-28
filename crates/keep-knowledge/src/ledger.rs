@@ -339,6 +339,11 @@ pub trait Ledger: Send + Sync {
         ns: &str,
         succeeded: bool,
     ) -> Result<JobCounts>;
+    /// Delete up to `limit` jobs in `state` that finished before `before`,
+    /// oldest first, and return how many went. A job's finish time is the
+    /// end of its last lease (`next_attempt_at`). Only `Succeeded` and
+    /// `Failed` jobs are ever deleted; other states delete nothing.
+    async fn prune_jobs(&self, state: JobState, before: Time, limit: usize) -> Result<usize>;
     /// Corpora with at least one job due at `now`, for a background worker.
     async fn due_corpora(&self, now: Time, limit: usize) -> Result<Vec<String>>;
     /// Check the ledger answers, for a readiness probe. A backend whose

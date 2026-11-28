@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use anyhow::{Context as _, anyhow, bail};
 use chrono::{DateTime, NaiveDate, Utc};
+use keep_knowledge::engine::JobRetention;
 use keep_knowledge::model::JobCounts;
 use keep_knowledge::session_extract::{SessionExtractor, SessionInput, SessionTurn, text_turns};
 use keep_knowledge::session_summary::SessionSummarizer;
@@ -69,6 +70,8 @@ pub struct ServiceOptions {
     pub ingest_job_budget: std::time::Duration,
     /// Pause between the background worker's job batches.
     pub job_pause: std::time::Duration,
+    /// How long finished background jobs are kept.
+    pub job_retention: JobRetention,
 }
 
 impl ServiceOptions {
@@ -84,6 +87,7 @@ impl ServiceOptions {
             model: None,
             ingest_job_budget: DEFAULT_INGEST_JOB_BUDGET,
             job_pause: std::time::Duration::ZERO,
+            job_retention: JobRetention::default(),
         }
     }
 }
@@ -116,7 +120,8 @@ impl KeepService {
         };
         let mut knowledge = knowledge
             .with_tokenizer(opts.tokenizer.clone())
-            .with_job_pause(opts.job_pause);
+            .with_job_pause(opts.job_pause)
+            .with_job_retention(opts.job_retention);
         let mut summarizer = None;
         if let Some(m) = &opts.model {
             if m.extraction {
@@ -179,6 +184,7 @@ impl KeepService {
             model: args.model.build()?,
             ingest_job_budget: std::time::Duration::from_millis(args.ingest_job_budget_ms),
             job_pause: std::time::Duration::from_millis(args.job_pause_ms),
+            job_retention: args.job_retention(),
         };
         let config = KnowledgeConfig {
             collection: args.collection.clone(),
