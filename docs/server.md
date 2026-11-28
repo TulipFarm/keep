@@ -343,6 +343,7 @@ input schema is in `tools/list`, or `GET /v1/tools` over HTTP.
 | `knowledge_traverse` | `POST /v1/knowledge/traverse` | Facts around an entity, 1 or 2 hops from `start`, optionally `as_of` or `valid_at` a time |
 | `knowledge_index` | `POST /v1/knowledge/index` | Book-style index: level 0 collections, level 1 sources and topics, level 2 entities |
 | `knowledge_forget_source` | `POST /v1/knowledge/forget_source` | Erase one source and everything derived only from it. Returns a receipt. |
+| `knowledge_forget_sources` | `POST /v1/knowledge/forget_sources` | Erase 1 to 1,000 `source_ids` in one pass. Returns `forgotten`, a receipt per erased source, and `missing`, the ids the scope does not hold. |
 | `knowledge_status` | `POST /v1/knowledge/status` | Background job counts and enrichment state for the scope only |
 | `knowledge_summarize` | `POST /v1/knowledge/summarize` | A few sentences summarizing one readable `source_id`, some `text`, or `episodes` (at most 200 turns, 200,000 characters), written by the configured model; see [Model-backed extraction](#model-backed-extraction-and-summaries). Needs `read`. |
 | `knowledge_rebuild_projection` | `POST /v1/knowledge/rebuild_projection` | Re-embed the scope user's whole corpus into the vector index from the records. Needs the `admin` permission. |

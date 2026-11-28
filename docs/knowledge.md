@@ -301,6 +301,12 @@ Facts that are also supported by other sources stay, with only their
 remaining evidence. An entry is written to an erasure journal, holding
 the time, counts and SHA-256 digests of the ids, but no content.
 
+`forget_sources` erases many sources in one ledger transaction and cleans
+the vector projection and orphaned entities once for the batch. Each source
+gets the receipt and journal entry that forgetting it alone, in the given
+order, would give: a fact stated only by sources in the batch counts as
+deleted by the last of them and kept by the others.
+
 `delete_corpus` removes a whole corpus.
 
 ## Storage profiles

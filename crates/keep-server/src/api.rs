@@ -384,6 +384,15 @@ pub struct KnowledgeForgetSourceReq {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct KnowledgeForgetSourcesReq {
+    #[serde(default)]
+    pub scope: Option<ScopeArg>,
+    /// Sources to erase, in order. Between 1 and 1000 ids.
+    pub source_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct KnowledgeCiteReq {
     #[serde(default)]
     pub scope: Option<ScopeArg>,
@@ -649,6 +658,14 @@ pub const TOOLS: &[ToolSpec] = &[
         true,
         "Permanently erase one ingested source and everything derived only from it. \
          Returns a receipt."
+    ),
+    tool!(
+        "knowledge_forget_sources",
+        KnowledgeForgetSourcesReq,
+        false,
+        true,
+        "Permanently erase up to 1000 ingested sources, and everything derived only from \
+         them, in one pass. Returns a receipt per erased source and the ids not found."
     ),
     tool!(
         "knowledge_cite",

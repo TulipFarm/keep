@@ -402,6 +402,17 @@ pub trait Ledger: Send + Sync {
         source_id: &str,
         now: Time,
     ) -> Result<Option<PurgeReport>>;
+    /// Purge many sources at once, with the same reports and journal entries
+    /// as purging them one by one in the given order. Unknown ids, repeats,
+    /// and sources outside `partition` (when given) are left alone and get no
+    /// report.
+    async fn purge_sources(
+        &self,
+        corpus: &str,
+        partition: Option<&str>,
+        source_ids: &[String],
+        now: Time,
+    ) -> Result<Vec<(String, PurgeReport)>>;
     async fn erasure_journal(&self) -> Result<Vec<ErasureEntry>>;
     /// Remove a whole corpus; returns the partitions it had.
     async fn delete_corpus(&self, corpus: &str) -> Result<Vec<String>>;

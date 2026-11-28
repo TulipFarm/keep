@@ -1057,6 +1057,27 @@ impl Ledger for MemoryLedger {
         Ok(self.lock().purge(corpus, source_id, now))
     }
 
+    async fn purge_sources(
+        &self,
+        corpus: &str,
+        partition: Option<&str>,
+        source_ids: &[String],
+        now: Time,
+    ) -> Result<Vec<(String, PurgeReport)>> {
+        let mut s = self.lock();
+        let mut out = Vec::new();
+        for id in source_ids {
+            let owned = s
+                .sources
+                .get(&key(corpus, id))
+                .is_some_and(|src| partition.is_none_or(|p| src.partition == p));
+            if owned && let Some(report) = s.purge(corpus, id, now) {
+                out.push((id.clone(), report));
+            }
+        }
+        Ok(out)
+    }
+
     async fn erasure_journal(&self) -> Result<Vec<ErasureEntry>> {
         Ok(self.lock().journal.clone())
     }
