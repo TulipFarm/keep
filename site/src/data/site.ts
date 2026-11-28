@@ -66,7 +66,7 @@ export const where = {
   items: [
     ["In memory", "Zero setup. Memory clears on restart.", "keep --user me serve &"],
     ["With Postgres", "Survives restarts. Uses pgvector or Qdrant.", "docker compose --profile postgres-vector up -d"],
-    ["Docker Compose", "Full stack with generated secrets.", "deploy/compose.yaml"],
+    ["Docker Compose", "Full stack using the prebuilt ghcr.io/tulipfarm/keep image.", "deploy/compose.yaml"],
   ] as [string, string, string][],
   link: ["Run with Docker Compose", `${repo}/blob/main/docs/server.md#run-with-docker-compose`] as [string, string],
 };
@@ -197,11 +197,11 @@ export const faq: [string, string][] = [
   ],
   [
     "Does Keep send my data to a model provider?",
-    "No. The server never calls a hosted model API. It embeds Knowledge with a local model, downloaded once on first start. It talks only to the Postgres and Qdrant you configure.",
+    "Not by default. Out of the box, Keep extracts facts with local rules and embeds Knowledge with a local model downloaded once on first start, so nothing leaves your machine. You can optionally configure an OpenAI-compatible model endpoint for model-backed extraction and summaries.",
   ],
   [
     "Does Keep ever delete anything?",
-    "Only when you ask. Edits, undos and changed facts become new revisions or fact versions. Old revisions are kept for up to 30 days, and the forget operation erases content for good.",
+    "Only when you ask. Edits, undos and changed facts become new revisions or fact versions. Old revisions are kept for up to 30 days, and forgetting erases one or many sources for good and returns a signed receipt for each.",
   ],
 ];
 
